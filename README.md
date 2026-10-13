@@ -14,8 +14,9 @@ Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kont
 - Čtení XLSX/XLS/CSV, DOCX a textových/HTML souborů.
 - Ruční oprava rozpoznaných plateb a čtvrtletních předpisů před výpočtem.
 - Dvacet průchodů OCR nad pěti různými variantami obrazu a čtyřmi režimy rozložení stránky; strukturované tabulky se čtou přímo z buněk.
-- Přesně 20 kontrolních bodů (shoda čtení, formát dat, návaznost čtvrtletí, věrohodnost základu, shoda pojistného se sazbou, duplicity a auditní podklady).
-- Výpočet i export jsou zablokovány, pokud není OCR jednohlasné nebo neprojde byť jediná z 20 kontrol.
+- Čtení čtvrtletních tabulek podle polohy slov v obrázku/PDF: číslice se spojují pouze uvnitř buňky, takže základ `258 475` a pojistné `2 171 Kč` zůstávají oddělené.
+- Přesně 20 kontrolních bodů (shoda čtení podle sloupců, formát dat, návaznost čtvrtletí, věrohodnost základu, shoda pojistného se sazbou, duplicity a oddělení základ/pojistné).
+- Výpočet i export jsou zablokovány, pokud není OCR jednohlasné, nelze spárovat základ a pojistné po sloupcích nebo neprojde byť jediná z 20 kontrol.
 - Samostatné sloupce pro požadovanou částku platby a skutečně vyřízenou částku; nulově vyřízené platby se nezapočítají, ale zůstanou ve vstupním auditu.
 - Text OCR screenshotu plateb zůstává dostupný pro vizuální kontrolu.
 - Započítávání plateb nejstaršímu neuhrazenému řádnému pojistnému.
