@@ -451,7 +451,7 @@
       const detectedTextRate = extractRate(state.baseText);
       if (state.sourceRate == null && detectedTextRate != null) state.sourceRate = detectedTextRate;
       if (state.sourceRate != null) {
-        $("rateInput").value = String(state.sourceRate).replace(".", ",");
+        $("rateInput").value = String(state.sourceRate);
         $("rateSource").textContent = state.sourceRateLabel;
       } else {
         $("rateInput").value = "";
@@ -616,6 +616,9 @@
     });
     if (warnings.some(w => /chybí|není platné|nemá platné|nemá kladnou/.test(w))) {
       throw new Error("Oprav chybějící hodnoty: " + warnings.filter(w => /chybí|není platné|nemá platné|nemá kladnou/.test(w)).join(" "));
+    }
+    if (warnings.some(w => /po zvoleném datu výpočtu/.test(w))) {
+      throw new Error("Některé platby jsou po zvoleném datu výpočtu. Posuň datum výpočtu na den poslední zahrnované platby nebo později.");
     }
 
     quarters.sort((a,b) => a.dueDate.localeCompare(b.dueDate));
@@ -905,19 +908,16 @@
 
     const calc = workbook.addWorksheet("Přehled čtvrtletí", { views: [{ state: "frozen", ySplit: 1 }] });
     calc.columns = [
-      {header:"Čtvrtletí",key:"period",width:14},{header:"Splatnost",key:"due",width:14},
-      {header:"Období pro výpočet",key:"source",width:19},{header:"Výpočtový základ (Kč)",key:"base",width:21},
-      {header:"Řádné pojistné (Kč)",key:"premium",width:20},{header:"Uhrazeno na pojistné (Kč)",key:"paid",width:22},
-      {header:"Nedoplatek pojistného (Kč)",key:"open",width:23},{header:"Navýšení celkem (Kč)",key:"fee",width:20},
-      {header:"Navýšení uhrazeno (Kč)",key:"feePaid",width:22},{header:"Navýšení zbývá (Kč)",key:"feeOpen",width:20}
+      {width:14},{width:14},{width:19},{width:21},{width:20},
+      {width:22},{width:23},{width:20},{width:22},{width:20}
     ];
-    const qhead = calc.addRow(calc.columns.map(c => c.header)); styleHeader(qhead);
+    const qhead = calc.addRow(["Čtvrtletí","Splatnost","Období pro výpočet","Výpočtový základ (Kč)","Řádné pojistné (Kč)","Uhrazeno na pojistné (Kč)","Nedoplatek pojistného (Kč)","Navýšení celkem (Kč)","Navýšení uhrazeno (Kč)","Navýšení zbývá (Kč)"]); styleHeader(qhead);
     r.quarters.forEach(q => calc.addRow([
       q.period, dateFmt(q.dueDate), q.sourcePeriod || "", q.base || 0, q.premium, q.paidPrincipal, q.remaining,
       q.totalAssessedFee, q.paidFee, q.feeUnpaid
     ]));
     styleBodyRows(calc, 2);
-    calc.views = [{ state: "frozen", ySplit: 1, autoFilter: { from: "A1", to: "J" + calc.rowCount } }];
+    calc.autoFilter = { from: "A1", to: "J" + calc.rowCount };
 
     const alloc = workbook.addWorksheet("Započtení plateb", { views: [{ state: "frozen", ySplit: 1 }] });
     const allocHeads = ["Datum", "Čtvrtletí", "Typ započtení", "Částka (Kč)", "Prodlení (měsíce)", "Navýšení (Kč)", "Původní částka platby (Kč)"];
