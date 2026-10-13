@@ -1,21 +1,38 @@
 # Výpočet zákonného pojištění
 
-Lokální webový prototyp pro přípravu výpočtu zákonného pojištění zaměstnavatele.
+Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kontrolu rozpoznaných dat, výpočet nedoplatků a export výsledného Excelu.
 
-## Aktuální stav
+## Vstupy
 
-- Rozhraní pro výběr screenshotu plateb, základního dokumentu a cílové šablony Excel.
-- Kontrolní souhrn vybraných souborů.
-- Soubory jsou zatím drženy pouze v paměti stránky; nejsou odesílány na server ani ukládány do historie.
-- Automatické čtení PDF/Excel/Word, OCR, výpočty a zápis do cílového Excelu zatím nejsou implementovány. Rozhraní to výslovně uvádí, aby nedošlo k záměně prototypu za hotový výpočet.
+1. Screenshot se seznamem skutečných plateb (obrázek).
+2. Základní dokument s předpisy a čtvrtletími: PDF, Excel, CSV, DOCX, TXT/HTML nebo obrázek.
+
+## Aktuální funkce
+
+- OCR screenshotů v prohlížeči pomocí Tesseract.js (čeština + angličtina).
+- Čtení textové vrstvy PDF; u skenovaných PDF lokální OCR vykreslených stránek.
+- Čtení XLSX/XLS/CSV, DOCX a textových/HTML souborů.
+- Ruční oprava rozpoznaných plateb a čtvrtletních předpisů před výpočtem.
+- Započítávání plateb nejstaršímu neuhrazenému řádnému pojistnému.
+- Evidence navýšení za prodlení odděleně; platby se na navýšení použijí až po uhrazení řádného pojistného.
+- Výpočet navýšení podle vzorců z dodané šablony: podíl 10 % za každý kalendářní měsíc mezi měsícem splatnosti a měsícem platby, pokud je platba po splatnosti; zaokrouhlení na celé Kč.
+- Export sešitu se známým listem \`List1\`, přehledem čtvrtletí, rozpadem započtení, vstupními daty a kontrolními upozorněními.
+- Kontrola rozporu mezi detekovanou sazbou a poměrem předpisů k výpočtovým základům.
 
 ## Ochrana dat
 
-Stránka samotná neobsahuje síťová volání pro upload souborů. Pro skutečné nasazení je potřeba:
-1. odstranit externí font import v `styles.css` nebo fonty lokálně přibalit;
-2. přibalit knihovny pro čtení dokumentů a OCR jako lokální soubory, nikoli tahat skripty z CDN;
-3. ověřit síťový provoz v prohlížeči a zajistit, aby obsah souborů, extrahovaný text i výsledky zůstávaly lokálně;
-4. implementovat výpočty pouze podle ověřených pravidel z reálné šablony a dokumentů;
-5. testovat proti ručně ověřeným příkladům před použitím pro skutečné pojistné.
+Aplikace neobsahuje API ani serverový endpoint pro upload dokumentů. Soubory se zpracovávají v aktuální relaci prohlížeče a automaticky se neukládají do GitHubu, databáze ani lokální historie. Exportovaný soubor se generuje v prohlížeči a stahuje do počítače.
 
-GitHub Pages může sloužit k hostování statických souborů aplikace (dostupnost pro private repository závisí na tarifu a nastavení GitHubu). Samotný statický web nezaručuje soukromý přístup k aplikaci; data ale mohou zůstat na klientovi, pokud aplikace nic neodesílá.
+Aby bylo možné načíst podporované formáty a provést OCR, aplikace stahuje JavaScriptové knihovny z CDNs a český/anglický OCR jazykový model. Tyto požadavky stahují pouze kód a jazyková data; aplikace jejich rozhraním nepředává obsah vstupních souborů. Pokud vyžadujete nulové požadavky na cizí domény, je třeba knihovny i OCR model přibalit lokálně a aktualizovat odkazy v \`index.html\` a \`app.js\`.
+
+## Důležitá omezení
+
+- OCR nemusí vždy správně přečíst malé částky nebo tabulky; před výpočtem zkontroluj a oprav hodnoty.
+- U PDF a Word dokumentů závisí rozpoznání tabulek na jejich rozložení. Pokud parser nenajde všechny řádky, doplň je ručně.
+- Starý formát DOC není podporován; převeď jej na DOCX nebo PDF.
+- Před úředním použitím porovnej výsledky s ověřeným výpočtem. Aplikace má raději zobrazit varování než domýšlet chybějící pravidla nebo hodnoty.
+- GitHub repo obsahuje pouze zdrojový kód; do repozitáře nevkládej screenshoty plateb, firemní dokumenty ani výstupní sešity.
+
+## Spuštění
+
+Aplikaci lze servírovat jako statické soubory. Pro lokální test stačí spustit jednoduchý HTTP server v adresáři aplikace a otevřít \`index.html\` přes \`localhost\`. Pokud ji budeš hostovat na GitHub Pages, pamatuj, že soukromé repo nezaručuje soukromý přístup na publikovanou webovou stránku.
