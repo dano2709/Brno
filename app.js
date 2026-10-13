@@ -820,23 +820,25 @@
       payments.every(p => validISODate(p.date)) ? "Každá platba má platné datum." : "Alespoň u jedné platby chybí nebo je neplatné datum.");
     add("Částky plateb jsou číselné a nezáporné", payments.length > 0 && payments.every(p => Number.isFinite(Number(p.amount)) && Number(p.amount) >= 0 && (p.requestedAmount == null || (Number.isFinite(Number(p.requestedAmount)) && Number(p.requestedAmount) >= 0))),
       "Kontrola požadované a skutečně vyřízené částky.");
-    add("Existuje alespoň jedna skutečně vyřízená platba", payments.some(p => Number(p.amount) > 0),
-      payments.some(p => Number(p.amount) > 0) ? "Nulově vyřízené řádky se nezapočítají." : "Všechny vyřízené částky jsou 0 Kč nebo prázdné.");
-    add("Vyřízená částka nepřevyšuje požadovanou", payments.every(p => p.requestedAmount == null || Number(p.amount) <= Number(p.requestedAmount)),
-      "Porovnání sloupců Částka platby a Vyřízeno.");
+    const hasPaidAmount = payments.some(p => Number(p.amount) > 0);
+    const processedWithinRequest = payments.every(p => p.requestedAmount == null || Number(p.amount) <= Number(p.requestedAmount));
+    add("Existuje skutečně vyřízená platba a nepřevyšuje požadovanou", hasPaidAmount && processedWithinRequest,
+      !hasPaidAmount ? "Všechny vyřízené částky jsou 0 Kč nebo prázdné." :
+        processedWithinRequest ? "Nulově vyřízené řádky se nezapočítají; vyřízené částky nepřevyšují částky plateb." :
+        "Některá vyřízená částka převyšuje požadovanou částku.");
     const payKeys = payments.map(p => [p.date, p.requestedAmount, p.amount].join("|"));
     add("Nejsou duplicitní platební řádky", new Set(payKeys).size === payKeys.length,
       new Set(payKeys).size === payKeys.length ? "Žádná stejná kombinace data a částek." : "Nalezeny zcela shodné platební řádky.");
-    add("Označení čtvrtletí mají správný formát", quarters.length > 0 && quarters.every(q => quarterMatch(q.period) && /^Q[1-4]\/\d{4}$/i.test(normalizeQuarterLabel(q.period)),
+    add("Označení čtvrtletí mají správný formát", quarters.length > 0 && quarters.every(q => quarterMatch(q.period) && /^Q[1-4]\/\d{4}$/i.test(normalizeQuarterLabel(q.period))),
       "Očekávaný tvar je například Q4/2023.");
     const periods = quarters.map(q => normalizeQuarterLabel(q.period));
     add("Každé čtvrtletí je uvedeno pouze jednou", periods.length > 0 && new Set(periods).size === periods.length,
       new Set(periods).size === periods.length ? "Čtvrtletí se neopakují." : "Stejné čtvrtletí je v tabulce vícekrát.");
-    add("Všechna čtvrtletí mají platné datum splatnosti", quarters.length > 0 && quarters.every(q => validISODate(q.dueDate)),
-      "Splatnost se musí dát přečíst z podkladu a nesmí se domýšlet.");
+    const dueDatesValid = quarters.length > 0 && quarters.every(q => validISODate(q.dueDate));
     const orderedByDue = quarters.slice().sort((a,b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
-    add("Splatnosti jsou chronologicky seřazené", orderedByDue.length > 0 && orderedByDue.every((q,i) => i === 0 || orderedByDue[i-1].dueDate <= q.dueDate),
-      "Kontrola časové návaznosti předpisů.");
+    const datesChronological = orderedByDue.length > 0 && orderedByDue.every((q,i) => i === 0 || orderedByDue[i-1].dueDate <= q.dueDate);
+    add("Datumy splatnosti jsou platné a chronologické", dueDatesValid && datesChronological,
+      !dueDatesValid ? "Alespoň jedno datum splatnosti chybí nebo není platné." : "Splatnosti jsou platné a chronologicky navazují.");
     const dueMatchesPeriod = quarters.every(q => {
       const info = quarterMatch(q.period);
       const due = parseDate(q.dueDate);
