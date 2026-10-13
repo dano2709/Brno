@@ -693,22 +693,41 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
     const allLines = [];
+    state.basePositionPages = [];
     for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
       setStatus("Čtu PDF", "Zpracovávám stránku " + pageNo + " z " + pdf.numPages + " lokálně.", true);
       const page = await pdf.getPage(pageNo);
       const content = await page.getTextContent();
+      const viewport1 = page.getViewport({ scale: 1 });
       const grouped = new Map();
+      const pageWords = [];
       (content.items || []).forEach(item => {
         const txt = String(item.str || "").trim();
         if (!txt) return;
-        const y = Math.round(item.transform && item.transform[5] ? item.transform[5] : 0);
+        const transform = item.transform || [];
+        const x = Number(transform[4]) || 0;
+        const baselineY = viewport1.height - (Number(transform[5]) || 0);
+        const wordHeight = Math.max(5, Number(item.height) || 8);
+        const totalWidth = Math.max(1, Number(item.width) || txt.length * wordHeight * 0.45);
+        const tokens = txt.split(/\s+/).filter(Boolean);
+        const totalChars = Math.max(1, tokens.reduce((sum,t)=>sum+t.length,0));
+        let charOffset = 0;
+        tokens.forEach(token => {
+          const x0 = x + totalWidth * charOffset / totalChars;
+          charOffset += token.length;
+          const x1 = x + totalWidth * charOffset / totalChars;
+          pageWords.push({ text:token, bbox:{x0,x1,y0:baselineY-wordHeight,y1:baselineY} });
+        });
+        const y = Math.round(transform[5] || 0);
         if (!grouped.has(y)) grouped.set(y, []);
-        grouped.get(y).push({ x: item.transform && item.transform[4] ? item.transform[4] : 0, txt });
+        grouped.get(y).push({ x, txt });
       });
       const lines = Array.from(grouped.entries()).sort((a,b) => b[0] - a[0]).map(entry => entry[1].sort((a,b) => a.x - b.x).map(x => x.txt).join(" "));
       const pageText = lines.join("\n").trim();
-      if (pageText.length > 30) allLines.push(pageText);
-      else {
+      if (pageText.length > 30) {
+        allLines.push(pageText);
+        state.basePositionPages.push({ data:{ words:pageWords } });
+      } else {
         const viewport = page.getViewport({ scale: 2 });
         const canvas = document.createElement("canvas");
         canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
@@ -716,6 +735,7 @@
         const pageOcr = await ocrImageConsensus(canvas, "PDF · stránka " + pageNo + " z " + pdf.numPages, "quarters");
         state.basePageOcrChecks.push(pageOcr.consensus);
         allLines.push(pageOcr.text);
+        if (pageOcr.data) state.basePositionPages.push({ data:pageOcr.data });
       }
     }
     return allLines.join("\n\n");
