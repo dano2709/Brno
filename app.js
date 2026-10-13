@@ -12,7 +12,11 @@
     sourceRate: null,
     sourceRateLabel: "",
     results: null,
-    ocrWorker: null
+    ocrWorker: null,
+    paymentConsensus: null,
+    baseConsensus: null,
+    basePageOcrChecks: [],
+    verificationTests: []
   };
 
   const $ = (id) => document.getElementById(id);
@@ -394,6 +398,157 @@
 
   async function parseImageForText(file) {
     return ocrImageBlob(file, "Čtu screenshot v prohlížeči.");
+  }
+
+
+  async function makeOcrVariants(blob) {
+    if (!window.createImageBitmap) return [blob, blob, blob, blob];
+    let bitmap;
+    try { bitmap = await createImageBitmap(blob); }
+    catch (_) { return [blob, blob, blob, blob]; }
+    const factor = Math.min(5, Math.max(1, 1500 / Math.max(bitmap.width, bitmap.height)));
+    const width = Math.max(1, Math.round(bitmap.width * factor));
+    const height = Math.max(1, Math.round(bitmap.height * factor));
+    const base = document.createElement("canvas");
+    base.width = width; base.height = height;
+    const baseCtx = base.getContext("2d", { willReadFrequently: true });
+    baseCtx.imageSmoothingEnabled = true;
+    baseCtx.imageSmoothingQuality = "high";
+    baseCtx.fillStyle = "#fff"; baseCtx.fillRect(0, 0, width, height);
+    baseCtx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+
+    const image = baseCtx.getImageData(0, 0, width, height);
+    const pixels = image.data;
+    const makeVariant = (mode) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const copy = ctx.createImageData(width, height);
+      const src = pixels, dst = copy.data;
+      for (let i = 0; i < src.length; i += 4) {
+        const gray = 0.299 * src[i] + 0.587 * src[i + 1] + 0.114 * src[i + 2];
+        let value;
+        if (mode === "contrast") value = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
+        else if (mode === "threshold150") value = gray > 150 ? 255 : 0;
+        else if (mode === "threshold185") value = gray > 185 ? 255 : 0;
+        else if (mode === "threshold125") value = gray > 125 ? 255 : 0;
+        else value = gray;
+        dst[i] = dst[i + 1] = dst[i + 2] = value;
+        dst[i + 3] = 255;
+      }
+      ctx.putImageData(copy, 0, 0);
+      return canvas;
+    };
+    return [base, makeVariant("contrast"), makeVariant("threshold150"), makeVariant("threshold185"), makeVariant("threshold125")];
+  }
+
+  function canonicalOcrSignature(kind, text) {
+    if (kind === "payments") {
+      const rows = parsePaymentText(text).map(p => [p.date, p.requestedAmount, p.amount])
+        .sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+      return JSON.stringify(rows);
+    }
+    const rows = parseQuartersFromText(text).map(q => [q.period, q.dueDate, q.sourcePeriod, q.base, q.premium])
+      .sort((a,b) => String(a[0]).localeCompare(String(b[0])));
+    return JSON.stringify(rows);
+  }
+
+  async function ocrImageConsensus(blob, label, kind) {
+    const worker = await getOcrWorker();
+    const variants = await makeOcrVariants(blob);
+    const psmModes = ["3", "4", "6", "11"];
+    const rounds = [];
+    const total = variants.length * psmModes.length;
+    setStatus("Ověřuji OCR", label + " · porovnávám " + total + " čtení s různým zpracováním obrazu a rozložením textu.", true);
+
+    for (let vi = 0; vi < variants.length; vi++) {
+      for (let pi = 0; pi < psmModes.length; pi++) {
+        const number = rounds.length + 1;
+        $("statusText").textContent = label + " · kontrolní čtení " + number + "/" + total + " (obraz " + (vi + 1) + "/" + variants.length + ", režim " + psmModes[pi] + ").";
+        try {
+          await worker.setParameters({ tessedit_pageseg_mode: psmModes[pi] });
+          const result = await worker.recognize(variants[vi]);
+          const text = result && result.data ? result.data.text || "" : "";
+          const signature = canonicalOcrSignature(kind, text);
+          const parsedCount = kind === "payments" ? parsePaymentText(text).length : parseQuartersFromText(text).length;
+          rounds.push({ number, text, signature, parsedCount, score: parsedCount * 10000 + text.length });
+        } catch (error) {
+          rounds.push({ number, text: "", signature: "OCR_ERROR_" + number, parsedCount: 0, score: 0, error: error && error.message ? error.message : String(error) });
+        }
+      }
+    }
+    await worker.setParameters({ tessedit_pageseg_mode: "3" });
+    if (kind === "payments") state.unparsedPaymentLines = [];
+
+    const best = rounds.slice().sort((a,b) => b.score - a.score)[0] || { text: "", signature: "EMPTY", parsedCount: 0 };
+    const signatures = rounds.map(x => x.signature);
+    const first = signatures[0] || "EMPTY";
+    const unanimous = rounds.length === 20 && signatures.every(x => x === first);
+    const frequency = new Map();
+    signatures.forEach(sig => frequency.set(sig, (frequency.get(sig) || 0) + 1));
+    const maxVotes = Math.max(0, ...frequency.values());
+    const result = {
+      mode: "OCR",
+      total: rounds.length,
+      unanimous,
+      bestText: best.text,
+      parsedCount: best.parsedCount,
+      matchingRuns: maxVotes,
+      signatures: Array.from(frequency.entries()).map(([signature,count]) => ({ signature, count })),
+      differences: unanimous ? [] : ["20 čtení nevrátilo totožné řádky a částky. Automatický výpočet je zablokován."],
+      details: rounds.map(x => ({ number:x.number, parsedCount:x.parsedCount, score:x.score, error:x.error || "" }))
+    };
+    return { text: best.text, consensus: result, rounds };
+  }
+
+  function makeTextVariants(text) {
+    const source = String(text || "");
+    const lines = source.split(/\r?\n/);
+    const variants = [
+      source,
+      source.replace(/\r\n/g, "\n"),
+      source.normalize("NFKC"),
+      source.replace(/[\u00a0\u202f]/g, " "),
+      source.replace(/[\u00a0\u202f]/g, "\u00a0"),
+      source.replace(/[ \t]+/g, " "),
+      source.replace(/[ \t]+/g, "\t"),
+      source.replace(/\s*\|\s*/g, " | "),
+      lines.map(x => x.trim()).join("\n"),
+      lines.map(x => x.trim()).reverse().join("\n"),
+      lines.map(x => x.replace(/[ \t]+/g, " ")).join("\n"),
+      lines.map(x => x.replace(/[ \t]+/g, "\u00a0")).join("\n"),
+      source.toLocaleLowerCase("cs-CZ"),
+      source.replace(/Kč/gi, " Kč"),
+      source.replace(/(\d) (\d{3})(?!\d)/g, "$1\u00a0$2"),
+      source.replace(/(\d)\u00a0(\d{3})(?!\d)/g, "$1 $2"),
+      source.replace(/\n{2,}/g, "\n"),
+      source.replace(/\n/g, " \n"),
+      lines.filter(Boolean).join("\n"),
+      lines.map(x => x.trim()).join("\r\n")
+    ];
+    return variants.slice(0,20);
+  }
+
+  function textParserConsensus(text, kind) {
+    const variants = makeTextVariants(text);
+    const reads = variants.map((variant, i) => {
+      const signature = canonicalOcrSignature(kind, variant);
+      return { number:i+1, signature };
+    });
+    const first = reads[0] ? reads[0].signature : "EMPTY";
+    const unanimous = reads.length === 20 && reads.every(x => x.signature === first);
+    const frequency = new Map();
+    reads.forEach(x => frequency.set(x.signature, (frequency.get(x.signature) || 0) + 1));
+    const matchingRuns = Math.max(0, ...frequency.values());
+    return {
+      mode: "Textové varianty",
+      total: reads.length,
+      unanimous,
+      matchingRuns,
+      differences: unanimous ? [] : ["20 normalizačních průchodů nevrátilo stejné rozpoznané řádky."],
+      details: reads.map(x => ({ number:x.number, signature:x.signature }))
+    };
   }
 
   async function parsePdf(file) {
