@@ -36,3 +36,5 @@ jobs:
         uses: actions/deploy-pages@v4
 
 # Fresh deployment after transient Pages artifact metadata issue.
+
+# Redeploy warning-only validation updates.
