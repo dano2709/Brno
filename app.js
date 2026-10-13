@@ -792,6 +792,7 @@
     $("verificationPanel").hidden = true;
     state.payments = []; state.quarters = []; state.results = null;
     state.paymentConsensus = null; state.baseConsensus = null; state.basePageOcrChecks = [];
+    state.basePositionPages = []; state.basePositionCheck = null;
     try {
       const paymentScan = await ocrImageConsensus(state.paymentFile, "Screenshot plateb", "payments");
       state.paymentConsensus = paymentScan.consensus;
@@ -808,11 +809,26 @@
         state.baseConsensus = baseScan.consensus;
         state.baseText = baseScan.text;
         state.quarters = parseQuartersFromText(state.baseText);
+        state.basePositionPages = baseScan.data ? [{ data:baseScan.data }] : [];
+        state.basePositionCheck = correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
       } else {
         gridResult = await readGridFile(state.baseFile);
         state.baseText = await readTextFile(state.baseFile);
         state.quarters = gridResult && gridResult.quarters.length ? gridResult.quarters : parseQuartersFromText(state.baseText);
         if (gridResult && gridResult.quarters.length) {
+          const plausibleRows = state.quarters.length > 0 && state.quarters.every(q =>
+            Number(q.base) > 1000 && Number(q.base) <= 10000000 &&
+            Number(q.premium) >= 1 && Number(q.premium) <= 100000
+          );
+          state.basePositionCheck = {
+            ok: plausibleRows,
+            matchedCount: plausibleRows ? state.quarters.length : 0,
+            expectedCount: state.quarters.length,
+            mode: "Hodnoty buněk",
+            detail: plausibleRows
+              ? "Základ a řádné pojistné byly načteny z oddělených buněk tabulky ("+state.quarters.length+"/"+state.quarters.length+" čtvrtletí)."
+              : "Alespoň jedna číselná buňka není v očekávaném rozsahu. Zkontroluj sloupce základu a řádného pojistného."
+          };
           state.baseConsensus = {
             mode: "Strukturovaná data",
             total: 20,
@@ -824,6 +840,23 @@
           };
         } else {
           state.baseConsensus = textParserConsensus(state.baseText, "quarters");
+          if (state.basePositionPages.length) {
+            state.basePositionCheck = correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
+          } else {
+            const plausibleRows = state.quarters.length > 0 && state.quarters.every(q =>
+              Number(q.base) > 1000 && Number(q.base) <= 10000000 &&
+              Number(q.premium) >= 1 && Number(q.premium) <= 100000
+            );
+            state.basePositionCheck = {
+              ok: plausibleRows,
+              matchedCount: plausibleRows ? state.quarters.length : 0,
+              expectedCount: state.quarters.length,
+              mode: "Číselná validace",
+              detail: plausibleRows
+                ? "Souřadnice buněk nebyly dostupné; oddělené hodnoty prošly kontrolou rozsahu a návaznosti sazby."
+                : "Bez souřadnic buněk nelze bezpečně oddělit základ a pojistné; nejméně jedna hodnota je neúplná nebo mimo očekávaný rozsah."
+            };
+          }
         }
         if (state.basePageOcrChecks.some(check => !check.unanimous)) {
           state.baseConsensus = {
@@ -1031,9 +1064,10 @@
       ratioConsistent ? "Poměr odpovídá stejné sazbě s přihlédnutím k zaokrouhlení." : "Alespoň jedna částka pravděpodobně obsahuje chybu čtení nebo patří k jinému předpisu.");
     add("OCR nezanechalo nevyřešené platební řádky", state.unparsedPaymentLines.length === 0,
       state.unparsedPaymentLines.length ? "Nezařazené řádky: " + state.unparsedPaymentLines.length + ". Zkontroluj OCR text screenshotu." : "Všechny číselné řádky plateb byly zařazeny.");
-    const sourceAvailable = String(state.baseText || "").trim().length > 0 || quarters.every(q => String(q.raw || "").length > 0);
-    add("Je dostupný auditní podklad", Boolean(state.paymentOcrText && sourceAvailable),
-      sourceAvailable ? "Rozpoznaný text základního dokumentu je dostupný ke kontrole." : "Chybí text zdroje pro auditní kontrolu.");
+    const positionCheck = state.basePositionCheck;
+    add("Základ a pojistné jsou oddělené podle sloupců",
+      Boolean(positionCheck && positionCheck.ok && positionCheck.matchedCount === quarters.length),
+      positionCheck ? positionCheck.detail : "Nepodařilo se ověřit, že základ a pojistné byly načteny ze samostatných buněk.");
     if (tests.length !== 20) throw new Error("Interní chyba: kontrolní sada musí obsahovat přesně 20 testů.");
     return tests;
   }
