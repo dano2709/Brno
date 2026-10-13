@@ -597,9 +597,13 @@
       feeUnpaid: 0,
       allocations: []
     })).filter(q => q.period || q.dueDate || q.premium > 0);
-    const payments = state.payments.map((p,i) => ({ ...p, index:i, amount: Number(p.amount), date: p.date })).filter(p => p.date || p.amount > 0);
+    const allPayments = state.payments.map((p,i) => ({ ...p, index:i, amount: Number(p.amount), date: p.date }));
+    allPayments.filter(p => validISODate(p.date) && Number.isFinite(p.amount) && p.amount === 0).forEach(p => {
+      warnings.push("Řádek plateb ze dne " + dateFmt(p.date) + " má ve sloupci Vyřízeno 0 Kč; nezapočítává se jako uhrazená platba.");
+    });
+    const payments = allPayments.filter(p => p.amount > 0 || !p.date);
     if (!quarters.length) throw new Error("Základní dokument neobsahuje žádné čtvrtletní předpisy. Přidej je do tabulky.");
-    if (!payments.length) throw new Error("Nenašel jsem žádné platby. Přidej je do tabulky.");
+    if (!payments.length) throw new Error("Nenašel jsem žádné kladné vyřízené platby. Řádky s částkou 0 Kč se nezapočítávají.");
     quarters.forEach(q => {
       if (!q.period) warnings.push("U jednoho předpisu chybí označení čtvrtletí.");
       if (!validISODate(q.dueDate)) warnings.push("U čtvrtletí " + (q.period || "(bez označení)") + " chybí nebo není platné datum splatnosti.");
