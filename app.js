@@ -7,6 +7,7 @@
     payments: [],
     quarters: [],
     paymentOcrText: "",
+    unparsedPaymentLines: [],
     baseText: "",
     sourceRate: null,
     sourceRateLabel: "",
@@ -172,20 +173,38 @@
   function parsePaymentText(text) {
     const lines = String(text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const parsed = [];
+    const unparsed = [];
     lines.forEach(line => {
       const dates = dateMatches(line);
-      if (!dates.length) return;
+      if (!dates.length) {
+        if (/\d/.test(line) && amountTokens(line).length >= 1 && !/částka|vyřízeno|datum|datum platby|platby/i.test(line)) {
+          unparsed.push(line);
+        }
+        return;
+      }
       const date = toISO(dates[dates.length - 1].text);
-      if (!date) return;
+      if (!date) {
+        unparsed.push(line);
+        return;
+      }
       const tokens = amountTokens(removeRanges(line, dates));
-      if (!tokens.length) return;
+      if (!tokens.length) {
+        unparsed.push(line);
+        return;
+      }
       const vals = tokens.map(t => t.value);
       const uniqueVals = vals.filter((v, i) => vals.findIndex(x => Math.abs(x - v) < 0.005) === i);
+      // The source table has requested amount first and "Vyřízeno" second.
+      // Prefer the final numeric token in the row; 0 means not actually processed.
       const amount = uniqueVals.length === 1 ? uniqueVals[0] : tokens[tokens.length - 1].value;
-      if (amount == null || amount < 0) return;
+      if (amount == null || amount < 0) {
+        unparsed.push(line);
+        return;
+      }
       const normalized = { date, amount: Math.round(amount * 100) / 100, raw: line };
       if (!parsed.some(p => p.date === normalized.date && p.amount === normalized.amount && p.raw === normalized.raw)) parsed.push(normalized);
     });
+    state.unparsedPaymentLines = unparsed;
     return parsed.sort((a,b) => a.date.localeCompare(b.date));
   }
 
@@ -272,7 +291,7 @@
         if (candidates.length) premium = candidates[candidates.length - 1].n;
       }
       if ((!premium || premium <= 0) && base > 0 && rate > 0) premium = Math.round(base * rate / 1000);
-      if (!dueDate && !(base > 0) && !(premium > 0)) continue;
+      if (!(base > 0) && !(premium > 0)) continue;
       if (quarters.some(q => q.period === periodInfo.period)) continue;
       quarters.push({ period: periodInfo.period, dueDate, sourcePeriod, base: base > 0 ? base : null, premium: premium > 0 ? Math.round(premium) : null, raw: normalizeRowText(row) });
     }
@@ -297,7 +316,7 @@
       let sourcePeriod = matches.length > 1 ? normalizeQuarterLabel(matches[1][0]) : "";
       const base = baseItem ? baseItem.value : null;
       const premium = premiumItem && premiumItem.value > 0 ? Math.round(premiumItem.value) : null;
-      if (!dueDate && !(base > 0) && !(premium > 0)) return;
+      if (!(base > 0) && !(premium > 0)) return;
       quarters.push({ period: firstInfo.period, dueDate, sourcePeriod, base, premium, raw: line });
     });
     return quarters.sort((a,b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
@@ -341,11 +360,25 @@
     if (window.createImageBitmap) {
       try {
         const bitmap = await createImageBitmap(blob);
-        const factor = Math.min(3, Math.max(1, 1800 / Math.max(bitmap.width, bitmap.height)));
+        const factor = Math.min(5, Math.max(1, 1500 / Math.max(bitmap.width, bitmap.height)));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(bitmap.width * factor);
         canvas.height = Math.round(bitmap.height * factor);
-        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        // Locally improve grayscale contrast to make small table values easier for OCR.
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = pixels.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.65 + 128));
+          data[i] = data[i + 1] = data[i + 2] = contrast;
+        }
+        ctx.putImageData(pixels, 0, 0);
         input = canvas;
         bitmap.close();
       } catch (_) {}
@@ -442,6 +475,7 @@
       setStatus("Čtu screenshot plateb", "Soubor se zpracovává lokálně.", true);
       state.paymentOcrText = await parseImageForText(state.paymentFile);
       state.payments = parsePaymentText(state.paymentOcrText);
+      $("paymentOcrText").textContent = state.paymentOcrText || "Ze screenshotu nebyl rozpoznán text.";
       setStatus("Čtu základní dokument", "Extrahuji tabulku čtvrtletí a předpisů.", true);
       const gridResult = await readGridFile(state.baseFile);
       state.baseText = await readTextFile(state.baseFile);
@@ -463,6 +497,7 @@
       $("reviewPanel").scrollIntoView({ behavior: "smooth", block: "start" });
       const notes = [];
       if (!state.payments.length) notes.push("Nepodařilo se spolehlivě rozpoznat platby.");
+      if (state.unparsedPaymentLines.length) notes.push(state.unparsedPaymentLines.length + " řádků screenshotu se nepodařilo spolehlivě zařadit. Zkontroluj rozpoznaný text níže.");
       if (!state.quarters.length) notes.push("Nepodařilo se rozpoznat čtvrtletní předpisy.");
       setStatus(notes.length ? "Podklady načteny s upozorněním" : "Podklady načteny", notes.length ? notes.join(" ") + " Doplň nebo oprav tabulky ručně." : "Zkontroluj částky, data a čtvrtletí před výpočtem.", false);
       $("spinner").hidden = false;
