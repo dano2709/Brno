@@ -13,8 +13,10 @@ Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kont
 - Čtení textové vrstvy PDF; u skenovaných PDF lokální OCR vykreslených stránek.
 - Čtení XLSX/XLS/CSV, DOCX a textových/HTML souborů.
 - Ruční oprava rozpoznaných plateb a čtvrtletních předpisů před výpočtem.
-- Dvacet průchodů OCR nad pěti různými variantami obrazu a čtyřmi režimy rozložení stránky; strukturované tabulky se čtou přímo z buněk.
-- Čtení čtvrtletních tabulek podle polohy slov v obrázku/PDF: číslice se spojují pouze uvnitř buňky, takže základ `258 475` a pojistné `2 171 Kč` zůstávají oddělené.
+- Dvacet průchodů OCR nad pěti různými variantami obrazu a čtyřmi režimy rozložení stránky; platby se konsolidují hlasováním po řádcích, ne porovnáním celého textu znak po znaku.
+- Zvýrazněný tmavý řádek plateb se navíc čte samostatně s převráceným kontrastem, aby se neztratila první úhrada.
+- U obrázků s mřížkou se hranice tabulky a sloupců hledají podle pixelů a OCR čte datum, základ a pojistné z oddělených buněk; číslice se nespojují přes hranice sloupců.
+- Když jedna částka zjevně nesedí na společnou sazbu potvrzenou ostatními čtvrtletími, aplikace může opravit pravděpodobnou chybu OCR podle vzorce a zaznamená původní i opravenou hodnotu do auditního textu.
 - Přesně 20 kontrolních bodů (shoda čtení podle sloupců, formát dat, návaznost čtvrtletí, věrohodnost základu, shoda pojistného se sazbou, duplicity a oddělení základ/pojistné).
 - Neúspěšné kontroly jsou upozornění, nikoli blokace: výpočet i export lze spustit i při neshodě OCR nebo neúspěšném validačním testu. Chybějící povinné hodnoty mohou samozřejmě znemožnit samotný matematický výpočet.
 - Samostatné sloupce pro požadovanou částku platby a skutečně vyřízenou částku; nulově vyřízené platby se nezapočítají, ale zůstanou ve vstupním auditu.
@@ -34,7 +36,7 @@ Aby bylo možné načíst podporované formáty a provést OCR, aplikace stahuje
 ## Důležitá omezení
 
 - Ani 20 shodných OCR průchodů není samo o sobě matematický důkaz správnosti. Proto se současně kontroluje sazba, výpočtový základ, předpisy, datumy a návaznost čtvrtletí.
-- Pokud se 20 OCR průchodů neshodne, Excel se nevygeneruje; nahraj kvalitnější nebo těsněji oříznutý obrázek. Ruční editace hodnot sama neshodu OCR nepřepíše.
+- Rozdíly mezi celými OCR výstupy nejsou samy o sobě důvodem k blokaci; aplikace používá hlasování po řádcích, čtení samostatných buněk a 20 validačních kontrol. Neúspěšné kontroly se zobrazí jako upozornění.
 - OCR nemusí vždy správně přečíst malé částky nebo tabulky; před výpočtem zkontroluj a oprav hodnoty.
 - U PDF a Word dokumentů závisí rozpoznání tabulek na jejich rozložení. Pokud parser nenajde všechny řádky, doplň je ručně.
 - Starý formát DOC není podporován; převeď jej na DOCX nebo PDF.
