@@ -492,6 +492,9 @@
         }
       }
     }
+    const supplementalPaymentReadings = kind === "payments"
+      ? await ocrHighlightedPaymentReadings(blob)
+      : [];
     await worker.setParameters({ tessedit_pageseg_mode: "3", tessedit_char_whitelist: "" });
     const best = rounds.slice().sort((a,b) => b.score - a.score)[0] || { text: "", signature: "EMPTY", parsedCount: 0, data:null };
     const signatures = rounds.map(x => x.signature);
@@ -503,7 +506,7 @@
     let stableRows = 0, lowConfidenceRows = 0;
     let rowAggregation = null;
     if (kind === "payments") {
-      rowAggregation = aggregatePaymentReadings(rounds);
+      rowAggregation = aggregatePaymentReadings(rounds, supplementalPaymentReadings);
       consensusRows = rowAggregation.rows;
       stableRows = rowAggregation.stableRows;
       lowConfidenceRows = rowAggregation.lowConfidenceRows.length;
@@ -752,15 +755,12 @@
 
 
 
-  function aggregatePaymentReadings(rounds) {
+  function aggregatePaymentReadings(rounds, supplementalReadings = []) {
     const slots = new Map();
     let usableRounds = 0;
-    for (const round of rounds) {
-      if (!round || !round.text) continue;
-      usableRounds++;
-      const rows = parsePaymentText(round.text, false);
+    const addRows = (rows) => {
       const perDate = new Map();
-      rows.forEach(row => {
+      (rows || []).forEach(row => {
         const ordinal = perDate.get(row.date) || 0;
         perDate.set(row.date, ordinal + 1);
         const key = row.date + "#" + ordinal;
@@ -771,7 +771,13 @@
         if (!slot.pairs.has(pairKey)) slot.pairs.set(pairKey, { requestedAmount:row.requestedAmount, amount:row.amount, votes:0, raw:row.raw || "" });
         slot.pairs.get(pairKey).votes++;
       });
+    };
+    for (const round of rounds) {
+      if (!round || !round.text) continue;
+      usableRounds++;
+      addRows(parsePaymentText(round.text, false));
     }
+    for (const reading of supplementalReadings) addRows(reading);
     const minPresence = Math.max(3, Math.ceil(rounds.length * 0.15));
     const consensusRows = [];
     const confidence = [];
@@ -802,6 +808,75 @@
       passed:rounds.length===20 && usableRounds>=15 && consensusRows.length>=12 &&
         consensusRows.every(row=>row.ocrStable && row.ocrVotes>=2)
     };
+  }
+
+
+
+  async function ocrHighlightedPaymentReadings(file) {
+    if (!window.createImageBitmap) return [];
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); } catch (_) { return []; }
+    const width=bitmap.width, height=bitmap.height;
+    const canvas=document.createElement("canvas");
+    canvas.width=width; canvas.height=height;
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(bitmap,0,0);
+    const image=ctx.getImageData(0,0,width,height), pixels=image.data;
+    const x0=Math.floor(width*0.02), x1=Math.floor(width*0.98);
+    const rowCounts=new Uint32Array(height);
+    for(let y=0;y<height;y++){
+      let count=0;
+      for(let x=x0;x<x1;x++){
+        const i=(y*width+x)*4;
+        if((pixels[i]+pixels[i+1]+pixels[i+2])/3<110) count++;
+      }
+      rowCounts[y]=count;
+    }
+    const candidates=[];
+    for(let y=Math.floor(height*0.08);y<Math.floor(height*0.92);y++){
+      if(rowCounts[y]>(x1-x0)*0.45) candidates.push(y);
+    }
+    const bands=[];
+    candidates.forEach(y=>{
+      const last=bands[bands.length-1];
+      if(last && y-last[last.length-1]<=1) last.push(y);
+      else bands.push([y]);
+    });
+    const usableBands=bands.filter(band=>{
+      const h=band[band.length-1]-band[0]+1;
+      return h>=height*0.012 && h<=height*0.09;
+    });
+    if(!usableBands.length){bitmap.close();return [];}
+    const worker=await getOcrWorker();
+    const readings=[];
+    for(const band of usableBands){
+      const top=Math.max(0,band[0]-2), bottom=Math.min(height,band[band.length-1]+3);
+      const crop=document.createElement("canvas");
+      const scale=5;
+      crop.width=(x1-x0)*scale; crop.height=(bottom-top)*scale;
+      const cctx=crop.getContext("2d",{willReadFrequently:true});
+      cctx.drawImage(bitmap,x0,top,x1-x0,bottom-top,0,0,crop.width,crop.height);
+      const data=cctx.getImageData(0,0,crop.width,crop.height);
+      const px=data.data;
+      for(let i=0;i<px.length;i+=4){
+        const gray=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+        const v=Math.max(0,Math.min(255,(255-gray-128)*1.6+128));
+        px[i]=px[i+1]=px[i+2]=v;
+      }
+      cctx.putImageData(data,0,0);
+      for(const psm of ["7","6","4","11"]){
+        try{
+          await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:""});
+          const result=await worker.recognize(crop);
+          const text=result&&result.data?String(result.data.text||""):"";
+          const rows=parsePaymentText(text,false);
+          if(rows.length) readings.push(rows);
+        }catch(_){}
+      }
+    }
+    bitmap.close();
+    await worker.setParameters({tessedit_pageseg_mode:"3",tessedit_char_whitelist:""});
+    return readings;
   }
 
   function quarterFromDueDate(value) {
