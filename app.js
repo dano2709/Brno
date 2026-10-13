@@ -788,8 +788,141 @@
     invalidateResults();
   });
 
+  function validationPeriodOrdinal(value) {
+    const m = String(value || "").match(/^Q([1-4])\/(\d{4})$/i);
+    return m ? Number(m[2]) * 4 + Number(m[1]) - 1 : null;
+  }
+
+  function buildVerificationTests() {
+    const payments = state.payments || [];
+    const quarters = (state.quarters || []).filter(q => q.period || q.dueDate || q.premium != null);
+    const rate = parseAmount($("rateInput").value);
+    const add = (name, pass, detail) => tests.push({ name, pass: Boolean(pass), detail: detail || (pass ? "V pořádku" : "Vyžaduje opravu") });
+    const tests = [];
+    const paymentConsensus = state.paymentConsensus;
+    const baseConsensus = state.baseConsensus;
+
+    add("Platební screenshot: 20 čtení se shoduje",
+      Boolean(paymentConsensus && paymentConsensus.unanimous && paymentConsensus.total === 20),
+      !paymentConsensus ? "Kontrola OCR ještě neproběhla." :
+        paymentConsensus.unanimous ? "Stejné částky a data ve všech 20 OCR průchodech." :
+        "Shodu našlo jen " + (paymentConsensus.matchingRuns || 0) + "/20 průchodů. Nahraj čitelnější nebo těsněji oříznutý screenshot.");
+    add("Základní dokument: 20 kontrol se shoduje",
+      Boolean(baseConsensus && baseConsensus.unanimous && baseConsensus.total === 20),
+      !baseConsensus ? "Kontrola základního dokumentu ještě neproběhla." :
+        baseConsensus.unanimous ? (baseConsensus.mode === "Strukturovaná data" ? "Hodnoty jsou načteny přímo z buněk, bez OCR; shodu dále ověřují strukturální testy." : "Všech 20 kontrolních průchodů vrací stejné čtvrtletní údaje.") :
+        "Kontrolní průchody se liší. Automatický výpočet zůstává zablokovaný.");
+    add("Platby byly rozpoznány", payments.length > 0,
+      payments.length ? "Rozpoznáno řádků: " + payments.length + "." : "Nebyly rozpoznány žádné platební řádky.");
+    add("Čtvrtletní předpisy byly rozpoznány", quarters.length > 0,
+      quarters.length ? "Rozpoznáno čtvrtletí: " + quarters.length + "." : "Nebyl nalezen žádný předpis pojistného.");
+    add("Všechny datumy plateb jsou platné", payments.length > 0 && payments.every(p => validISODate(p.date)),
+      payments.every(p => validISODate(p.date)) ? "Každá platba má platné datum." : "Alespoň u jedné platby chybí nebo je neplatné datum.");
+    add("Částky plateb jsou číselné a nezáporné", payments.length > 0 && payments.every(p => Number.isFinite(Number(p.amount)) && Number(p.amount) >= 0 && (p.requestedAmount == null || (Number.isFinite(Number(p.requestedAmount)) && Number(p.requestedAmount) >= 0))),
+      "Kontrola požadované a skutečně vyřízené částky.");
+    add("Existuje alespoň jedna skutečně vyřízená platba", payments.some(p => Number(p.amount) > 0),
+      payments.some(p => Number(p.amount) > 0) ? "Nulově vyřízené řádky se nezapočítají." : "Všechny vyřízené částky jsou 0 Kč nebo prázdné.");
+    add("Vyřízená částka nepřevyšuje požadovanou", payments.every(p => p.requestedAmount == null || Number(p.amount) <= Number(p.requestedAmount)),
+      "Porovnání sloupců Částka platby a Vyřízeno.");
+    const payKeys = payments.map(p => [p.date, p.requestedAmount, p.amount].join("|"));
+    add("Nejsou duplicitní platební řádky", new Set(payKeys).size === payKeys.length,
+      new Set(payKeys).size === payKeys.length ? "Žádná stejná kombinace data a částek." : "Nalezeny zcela shodné platební řádky.");
+    add("Označení čtvrtletí mají správný formát", quarters.length > 0 && quarters.every(q => quarterMatch(q.period) && /^Q[1-4]\/\d{4}$/i.test(normalizeQuarterLabel(q.period)),
+      "Očekávaný tvar je například Q4/2023.");
+    const periods = quarters.map(q => normalizeQuarterLabel(q.period));
+    add("Každé čtvrtletí je uvedeno pouze jednou", periods.length > 0 && new Set(periods).size === periods.length,
+      new Set(periods).size === periods.length ? "Čtvrtletí se neopakují." : "Stejné čtvrtletí je v tabulce vícekrát.");
+    add("Všechna čtvrtletí mají platné datum splatnosti", quarters.length > 0 && quarters.every(q => validISODate(q.dueDate)),
+      "Splatnost se musí dát přečíst z podkladu a nesmí se domýšlet.");
+    const orderedByDue = quarters.slice().sort((a,b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+    add("Splatnosti jsou chronologicky seřazené", orderedByDue.length > 0 && orderedByDue.every((q,i) => i === 0 || orderedByDue[i-1].dueDate <= q.dueDate),
+      "Kontrola časové návaznosti předpisů.");
+    const dueMatchesPeriod = quarters.every(q => {
+      const info = quarterMatch(q.period);
+      const due = parseDate(q.dueDate);
+      if (!info || !due) return false;
+      const month = info.quarter * 3 - 2;
+      const lastDay = new Date(info.year, month, 0).getDate();
+      return due.getFullYear() === info.year && due.getMonth() + 1 === month && due.getDate() === lastDay;
+    });
+    add("Splatnost odpovídá označení čtvrtletí", quarters.length > 0 && dueMatchesPeriod,
+      dueMatchesPeriod ? "Měsíc a poslední den splatnosti odpovídají označení Q1–Q4." : "Alespoň jedno datum nesedí k označení čtvrtletí. Zkontroluj období ve zdroji.");
+    const ordinals = orderedByDue.map(q => validationPeriodOrdinal(q.period));
+    const sequential = ordinals.length > 0 && ordinals.every((n,i) => n != null && (i === 0 || n === ordinals[i-1] + 1));
+    add("Mezi čtvrtletími nejsou mezery", sequential,
+      sequential ? "Předpisy navazují po jednotlivých čtvrtletích." : "Řada čtvrtletí má mezeru, nesprávné pořadí nebo označení. Ověř rozsah podkladu.");
+    add("Všechny výpočtové základy jsou kladné", quarters.length > 0 && quarters.every(q => Number(q.base) > 0 && Number.isFinite(Number(q.base))),
+      "Základ nesmí být prázdný, nulový ani textově spojený s vedlejší částkou.");
+    add("Výpočtové základy mají věrohodný rozsah", quarters.length > 0 && quarters.every(q => Number(q.base) > 1000 && Number(q.base) <= 10000000),
+      "Kontrola zachytí například omylem spojené hodnoty 258475 a 2171 → 258475217.");
+    add("Řádné pojistné je kladné a věrohodné", quarters.length > 0 && quarters.every(q => Number(q.premium) >= 1 && Number(q.premium) <= 100000),
+      "Předpis nesmí být prázdný ani podezřele malý či velký.");
+    const ratioValues = quarters.filter(q => Number(q.base) > 0 && Number(q.premium) > 0).map(q => Number(q.premium) / Number(q.base) * 1000);
+    let premiumMathPass = ratioValues.length === quarters.length && ratioValues.length > 0;
+    if (premiumMathPass && rate > 0) {
+      premiumMathPass = quarters.every(q => Math.abs(Math.round(Number(q.base) * rate / 1000) - Number(q.premium)) <= 1);
+    } else if (premiumMathPass) {
+      const average = ratioValues.reduce((sum,n) => sum+n, 0) / ratioValues.length;
+      premiumMathPass = ratioValues.every(n => Math.abs(n-average) <= 0.35);
+    }
+    add("Základ a řádné pojistné odpovídají sazbě", premiumMathPass,
+      rate > 0 ? "Ověřeno vzorcem ZAOKROUHLIT(základ × " + rate + " / 1000; 0)." : "Sazba není uvedena; porovnávají se poměry všech čtvrtletí. Doplň správnou sazbu, pokud předpis chybí.");
+    const ratioConsistent = ratioValues.length > 0 && Math.max(...ratioValues) - Math.min(...ratioValues) <= 0.35;
+    add("Poměr pojistného k základu je mezi čtvrtletími konzistentní", ratioConsistent,
+      ratioConsistent ? "Poměr odpovídá stejné sazbě s přihlédnutím k zaokrouhlení." : "Alespoň jedna částka pravděpodobně obsahuje chybu čtení nebo patří k jinému předpisu.");
+    add("OCR nezanechalo nevyřešené platební řádky", state.unparsedPaymentLines.length === 0,
+      state.unparsedPaymentLines.length ? "Nezařazené řádky: " + state.unparsedPaymentLines.length + ". Zkontroluj OCR text screenshotu." : "Všechny číselné řádky plateb byly zařazeny.");
+    const sourceAvailable = String(state.baseText || "").trim().length > 0 || quarters.every(q => String(q.raw || "").length > 0);
+    add("Je dostupný auditní podklad", Boolean(state.paymentOcrText && sourceAvailable),
+      sourceAvailable ? "Rozpoznaný text základního dokumentu je dostupný ke kontrole." : "Chybí text zdroje pro auditní kontrolu.");
+    if (tests.length !== 20) throw new Error("Interní chyba: kontrolní sada musí obsahovat přesně 20 testů.");
+    return tests;
+  }
+
+  function refreshVerification() {
+    const panel = $("verificationPanel");
+    if (!panel) return [];
+    const hasInputs = Boolean(state.paymentFile && state.baseFile && (state.paymentConsensus || state.baseConsensus));
+    panel.hidden = !hasInputs;
+    if (!hasInputs) {
+      $("calculateButton").disabled = true;
+      return [];
+    }
+    const tests = buildVerificationTests();
+    state.verificationTests = tests;
+    const passed = tests.filter(test => test.pass).length;
+    $("verificationTitle").textContent = "20 kontrolních testů";
+    $("verificationSubtitle").textContent = "Výpočet a export se odemknou až po úspěšném dokončení všech kontrol.";
+    $("verificationScore").textContent = passed + "/20 úspěšných";
+    $("verificationScore").className = "verification-score " + (passed === 20 ? "pass" : "fail");
+    $("verificationProgress").style.width = (passed / 20 * 100) + "%";
+    const results = $("verificationResults");
+    results.replaceChildren();
+    tests.forEach((test, index) => {
+      const row = document.createElement("div");
+      row.className = "verification-item " + (test.pass ? "pass" : "fail");
+      const icon = element("span", { className:"v-icon" }, test.pass ? "✓" : "!");
+      const copy = document.createElement("div");
+      const title = element("strong", {}, String(index + 1).padStart(2, "0") + ". " + test.name);
+      const detail = element("div", {}, test.detail);
+      detail.className = "verification-detail";
+      copy.append(title, detail);
+      row.append(icon, copy);
+      results.append(row);
+    });
+    const failures = tests.filter(test => !test.pass);
+    const foot = $("verificationFoot");
+    foot.classList.toggle("blocked", failures.length > 0);
+    foot.textContent = failures.length
+      ? "Výpočet je BLOKOVÁN. Neúspěšné kontroly: " + failures.map(test => test.name).join("; ") + ". Oprav podklad nebo načti čitelnější originál."
+      : "Všech 20 testů prošlo. Je možné pokračovat k výpočtu; výsledek stále zkontroluj před exportem.";
+    $("calculateButton").disabled = failures.length > 0;
+    return tests;
+  }
+
   function invalidateResults() {
     $("resultsPanel").hidden = true;
+    refreshVerification();
   }
 
   $("addPayment").addEventListener("click", () => {
