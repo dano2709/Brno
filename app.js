@@ -16,6 +16,8 @@
     paymentConsensus: null,
     baseConsensus: null,
     basePageOcrChecks: [],
+    basePositionPages: [],
+    basePositionCheck: null,
     verificationTests: []
   };
 
@@ -472,7 +474,7 @@
           const text = result && result.data ? result.data.text || "" : "";
           const signature = canonicalOcrSignature(kind, text);
           const parsedCount = kind === "payments" ? parsePaymentText(text).length : parseQuartersFromText(text).length;
-          rounds.push({ number, text, signature, parsedCount, score: parsedCount * 10000 + text.length });
+          rounds.push({ number, text, data: result && result.data ? result.data : null, signature, parsedCount, score: parsedCount * 10000 + text.length });
         } catch (error) {
           rounds.push({ number, text: "", signature: "OCR_ERROR_" + number, parsedCount: 0, score: 0, error: error && error.message ? error.message : String(error) });
         }
@@ -494,12 +496,13 @@
       unanimous,
       bestText: best.text,
       parsedCount: best.parsedCount,
+      positionedData: best.data || null,
       matchingRuns: maxVotes,
       signatures: Array.from(frequency.entries()).map(([signature,count]) => ({ signature, count })),
       differences: unanimous ? [] : ["20 čtení nevrátilo totožné řádky a částky. Automatický výpočet je zablokován."],
       details: rounds.map(x => ({ number:x.number, parsedCount:x.parsedCount, score:x.score, error:x.error || "" }))
     };
-    return { text: best.text, consensus: result, rounds };
+    return { text: best.text, data: best.data || null, consensus: result, rounds };
   }
 
   function makeTextVariants(text) {
