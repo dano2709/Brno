@@ -1202,6 +1202,7 @@
     $("reviewPanel").hidden = true; $("resultsPanel").hidden = true;
     $("verificationPanel").hidden = true;
     state.payments = []; state.quarters = []; state.results = null;
+    state.unparsedPaymentLines = [];
     state.paymentConsensus = null; state.baseConsensus = null; state.basePageOcrChecks = [];
     state.basePositionPages = []; state.basePositionCheck = null;
     try {
