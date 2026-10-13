@@ -960,11 +960,13 @@
     try {
       // This standardized payroll/premium table has six data columns; the two
       // rightmost columns are the calculation base and regular premium.
-      if(columns.length<6) {
+      if(columns.length<7) {
         bitmap.close();
-        return {quarters:[],ok:false,detail:"Tabulka nemá očekávané sloupce pro základ a pojistné."};
+        return {quarters:[],ok:false,detail:"Tabulka nemá očekávaných šest datových sloupců pro základ a pojistné."};
       }
-      const baseColumn=columns.length-2, premiumColumn=columns.length-1;
+      // columns[] stores grid boundaries; with six table columns, the last two
+      // cell indices are length-3 (base) and length-2 (premium).
+      const baseColumn=columns.length-3, premiumColumn=columns.length-2;
       const headerBase=await cropText({x0:columns[baseColumn]+3,x1:columns[baseColumn+1]-3,y0:headerTop+2,y1:headerBottom-2},"text");
       const headerPremium=await cropText({x0:columns[premiumColumn]+3,x1:columns[premiumColumn+1]-3,y0:headerTop+2,y1:headerBottom-2},"text");
       const baseHeaderNorm=normalizeOcrWord(headerBase.text);
@@ -993,7 +995,8 @@
         });
       }
       quarters.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-      const rowsComplete=quarters.length>=10 &&
+      const expectedRows=Math.max(0,rowCount-2); // header + one non-premium helper row
+      const rowsComplete=quarters.length===expectedRows && quarters.length>=10 &&
         quarters.every((q,i)=>i===0 || validationPeriodOrdinal(q.period)===validationPeriodOrdinal(quarters[i-1].period)+1);
       bitmap.close();
       await worker.setParameters({tessedit_pageseg_mode:"3",tessedit_char_whitelist:""});
@@ -1130,6 +1133,7 @@
       const ext = state.baseFile.name.split(".").pop().toLowerCase();
       const isImage = ["png","jpg","jpeg","webp","gif"].includes(ext) || state.baseFile.type.startsWith("image/");
       let gridResult = null;
+      let cellRateCheck = null;
       if (isImage) {
         const baseScan = await ocrImageConsensus(state.baseFile, "Základní tabulka", "quarters");
         state.baseText = baseScan.text;
@@ -1148,6 +1152,11 @@
             pageCount:1,
             grid:gridRead.grid
           };
+          cellRateCheck = repairPremiumsFromCommonRate(state.quarters, parseAmount($("rateInput").value));
+          if (cellRateCheck.corrections.length) {
+            state.basePositionCheck.detail += " Opraveno OCR podle společné sazby "+cellRateCheck.rate.toLocaleString("cs-CZ")+" ‰: "+
+              cellRateCheck.corrections.map(c=>c.period+" "+c.from+" → "+c.to+" Kč").join(", ")+".";
+          }
           state.baseConsensus = {
             ...baseScan.consensus,
             mode:"20 OCR průchodů + samostatné buňky",
@@ -1222,9 +1231,14 @@
       }
 
       state.sourceRate = gridResult && gridResult.rate != null ? gridResult.rate : extractRate(state.baseText);
-      state.sourceRateLabel = state.sourceRate != null ? "Sazba rozpoznána ze základního dokumentu" : "Sazba nebyla rozpoznána";
       const detectedTextRate = extractRate(state.baseText);
       if (state.sourceRate == null && detectedTextRate != null) state.sourceRate = detectedTextRate;
+      if (state.sourceRate == null && cellRateCheck && cellRateCheck.rate != null) {
+        state.sourceRate = cellRateCheck.rate;
+        state.sourceRateLabel = "Sazba odhadnuta z konzistentních předpisů";
+      } else {
+        state.sourceRateLabel = state.sourceRate != null ? "Sazba rozpoznána ze základního dokumentu" : "Sazba nebyla rozpoznána";
+      }
       if (state.sourceRate != null) {
         $("rateInput").value = String(state.sourceRate);
         $("rateSource").textContent = state.sourceRateLabel;
