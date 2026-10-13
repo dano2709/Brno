@@ -699,6 +699,7 @@
     if (detectedRate != null && impliedRates.length) {
       const meanRate = impliedRates.reduce((sum,x) => sum + x, 0) / impliedRates.length;
       if (Math.abs(detectedRate - meanRate) > 0.4) warnings.push("Sazba " + detectedRate.toLocaleString("cs-CZ") + " ‰ se výrazně liší od poměru základu a předpisů v tabulce (orientačně " + meanRate.toLocaleString("cs-CZ", { maximumFractionDigits: 2 }) + " ‰). Ověř, zda sazba i čtvrtletní předpisy patří ke stejnému případu.");
+    }
     if (state.sourceRate == null && !($("rateInput").value.trim())) {
       const anyMissingPremium = quarters.some(q => !(q.premium > 0));
       if (anyMissingPremium) warnings.push("Chybí sazba nebo předpis pojistného; výpočet nepoužívej, dokud údaje nedoplníš.");
