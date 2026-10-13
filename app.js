@@ -758,15 +758,17 @@
   function aggregatePaymentReadings(rounds, supplementalReadings = []) {
     const slots = new Map();
     let usableRounds = 0;
-    const addRows = (rows) => {
+    const addRows = (rows, supplemental = false) => {
       const perDate = new Map();
       (rows || []).forEach(row => {
         const ordinal = perDate.get(row.date) || 0;
         perDate.set(row.date, ordinal + 1);
         const key = row.date + "#" + ordinal;
-        if (!slots.has(key)) slots.set(key, { date:row.date, ordinal, seenRounds:0, pairs:new Map(), raw:row.raw || "" });
+        if (!slots.has(key)) slots.set(key, { date:row.date, ordinal, seenRounds:0, normalSeenRounds:0, supplementalVotes:0, pairs:new Map(), raw:row.raw || "" });
         const slot = slots.get(key);
         slot.seenRounds++;
+        if (supplemental) slot.supplementalVotes++;
+        else slot.normalSeenRounds++;
         const pairKey = String(row.requestedAmount) + "|" + String(row.amount);
         if (!slot.pairs.has(pairKey)) slot.pairs.set(pairKey, { requestedAmount:row.requestedAmount, amount:row.amount, votes:0, raw:row.raw || "" });
         slot.pairs.get(pairKey).votes++;
@@ -775,18 +777,21 @@
     for (const round of rounds) {
       if (!round || !round.text) continue;
       usableRounds++;
-      addRows(parsePaymentText(round.text, false));
+      addRows(parsePaymentText(round.text, false), false);
     }
-    for (const reading of supplementalReadings) addRows(reading);
-    const minPresence = Math.max(3, Math.ceil(rounds.length * 0.15));
+    for (const reading of supplementalReadings) addRows(reading, true);
+    const minPresence = Math.max(6, Math.ceil(rounds.length * 0.30));
     const consensusRows = [];
     const confidence = [];
     for (const slot of slots.values()) {
-      if (slot.seenRounds < minPresence) continue;
+      // Reject OCR-only ghost rows (for example 19.01.2024 misread as 19.02.2024).
+      // A highlighted row can instead qualify via at least three independent crop reads.
+      if (slot.normalSeenRounds < minPresence && slot.supplementalVotes < 3) continue;
       const pairs = Array.from(slot.pairs.values()).sort((a,b)=>b.votes-a.votes);
       const winner = pairs[0];
       if (!winner) continue;
-      const stable = winner.votes >= Math.max(2, Math.ceil(slot.seenRounds * 0.35));
+      const effectiveReadCount = slot.normalSeenRounds || slot.supplementalVotes;
+      const stable = winner.votes >= Math.max(2, Math.ceil(effectiveReadCount * 0.35));
       consensusRows.push({
         date:slot.date,
         ordinal:slot.ordinal,
