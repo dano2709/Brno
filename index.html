@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102e46">
+  <meta name="description" content="Lokální nástroj pro kontrolu podkladů a výpočet zákonného pojištění.">
+  <title>Výpočet zákonného pojištění</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">ZP</div>
+    <div>
+      <p class="eyebrow">LOKÁLNÍ PRACOVNÍ PROSTŘEDÍ</p>
+      <h1>Výpočet zákonného pojištění</h1>
+    </div>
+    <span class="privacy-pill"><span class="dot"></span> Data zůstávají v tomto prohlížeči</span>
+  </header>
+
+  <main class="container">
+    <section class="intro">
+      <div>
+        <p class="eyebrow">ZPRACOVÁNÍ PODKLADŮ</p>
+        <h2>Od podkladů k ověřenému Excelu</h2>
+        <p class="intro-copy">Vyber screenshot uskutečněných plateb a základní dokument. Nejdříve zobrazíme rozpoznané údaje ke kontrole, teprve potom navážeme výpočty a exportem.</p>
+      </div>
+      <div class="step-indicator" aria-label="Postup">
+        <div class="step active"><span>1</span><small>Podklady</small></div>
+        <div class="step-line"></div>
+        <div class="step"><span>2</span><small>Kontrola</small></div>
+        <div class="step-line"></div>
+        <div class="step"><span>3</span><small>Výstup</small></div>
+      </div>
+    </section>
+
+    <section class="privacy-note" role="note">
+      <div class="note-icon" aria-hidden="true">⌂</div>
+      <div>
+        <strong>Navrženo pro lokální práci</strong>
+        <p>Vybrané soubory zpracovává tato stránka v prohlížeči. Tato počáteční verze je nikam nenahrává; neobsahuje serverové úložiště ani externí AI.</p>
+      </div>
+      <span class="note-status">LOKÁLNĚ</span>
+    </section>
+
+    <section class="upload-grid" aria-label="Vstupní podklady">
+      <article class="upload-card">
+        <div class="card-head">
+          <span class="card-number">01</span>
+          <span class="file-type">OBRÁZEK</span>
+        </div>
+        <div class="upload-icon image-icon" aria-hidden="true">▧</div>
+        <h3>Screenshot plateb</h3>
+        <p>Obrázek přehledu skutečně uhrazených částek a dat plateb.</p>
+        <label class="file-drop" for="paymentsFile" id="paymentsDrop">
+          <span class="drop-symbol">＋</span>
+          <strong>Vybrat screenshot</strong>
+          <span>PNG, JPG, WEBP</span>
+        </label>
+        <input id="paymentsFile" class="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+        <div class="file-meta" id="paymentsMeta" aria-live="polite">Zatím nebyl vybrán soubor</div>
+      </article>
+
+      <article class="upload-card">
+        <div class="card-head">
+          <span class="card-number">02</span>
+          <span class="file-type">ZÁKLADNÍ DOKUMENT</span>
+        </div>
+        <div class="upload-icon doc-icon" aria-hidden="true">▤</div>
+        <h3>Předpisy a základ</h3>
+        <p>Dokument s předpisy pojistného, obdobími a pravidly výpočtu.</p>
+        <label class="file-drop" for="baseFile" id="baseDrop">
+          <span class="drop-symbol">＋</span>
+          <strong>Vybrat dokument</strong>
+          <span>PDF, XLSX, XLS, DOCX, DOC, TXT, CSV</span>
+        </label>
+        <input id="baseFile" class="file-input" type="file" accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.csv,application/pdf">
+        <div class="file-meta" id="baseMeta" aria-live="polite">Zatím nebyl vybrán soubor</div>
+      </article>
+    </section>
+
+    <section class="next-panel">
+      <div class="next-copy">
+        <h3>Další krok: cílový Excel</h3>
+        <p>Vyber také šablonu, do které se mají zapsat výsledky. Zatím se soubor jen lokálně načte; nic se nepřepíše bez potvrzení.</p>
+      </div>
+      <label class="template-picker" for="targetFile"><span aria-hidden="true">＋</span> Vybrat cílový Excel</label>
+      <input id="targetFile" class="file-input" type="file" accept=".xlsx,.xls">
+      <div class="file-meta target-meta" id="targetMeta" aria-live="polite">Cílová šablona nebyla vybrána</div>
+    </section>
+
+    <section class="selected-summary" id="selectedSummary" hidden>
+      <div>
+        <p class="eyebrow">VYBRANÉ SOUBORY</p>
+        <h3>Připraveno ke kontrole</h3>
+        <p class="summary-text">Soubory zůstávají v paměti této stránky. Pro další krok je potřeba doplnit čtení formátů a ověřit výstupní šablonu.</p>
+      </div>
+      <button class="primary-button" id="reviewButton" type="button">Zkontrolovat podklady <span aria-hidden="true">→</span></button>
+    </section>
+
+    <section class="review-panel" id="reviewPanel" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">KONTROLA PŘED VÝPOČTEM</p>
+          <h2>Souhrn vybraných souborů</h2>
+        </div>
+        <span class="review-badge">Bez výpočtu</span>
+      </div>
+      <div class="review-list" id="reviewList"></div>
+      <div class="warning-note">
+        <strong>Automatický výpočet zatím není aktivní.</strong>
+        <p>Abychom předešli nesprávným částkám, je potřeba nejprve implementovat čtečky PDF/Excel/Word a OCR a potvrdit pravidla z reálné šablony. Tato verze zatím pouze eviduje vybrané soubory v paměti stránky.</p>
+      </div>
+      <button type="button" class="secondary-button" id="backButton">Upravit výběr</button>
+    </section>
+
+    <footer>
+      <span>Výpočet zákonného pojištění</span>
+      <span>Lokální prototyp · žádný serverový zápis</span>
+    </footer>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
