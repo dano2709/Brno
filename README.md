@@ -13,6 +13,9 @@ Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kont
 - Čtení textové vrstvy PDF; u skenovaných PDF lokální OCR vykreslených stránek.
 - Čtení XLSX/XLS/CSV, DOCX a textových/HTML souborů.
 - Ruční oprava rozpoznaných plateb a čtvrtletních předpisů před výpočtem.
+- Dvacet průchodů OCR nad pěti různými variantami obrazu a čtyřmi režimy rozložení stránky; strukturované tabulky se čtou přímo z buněk.
+- Přesně 20 kontrolních bodů (shoda čtení, formát dat, návaznost čtvrtletí, věrohodnost základu, shoda pojistného se sazbou, duplicity a auditní podklady).
+- Výpočet i export jsou zablokovány, pokud není OCR jednohlasné nebo neprojde byť jediná z 20 kontrol.
 - Samostatné sloupce pro požadovanou částku platby a skutečně vyřízenou částku; nulově vyřízené platby se nezapočítají, ale zůstanou ve vstupním auditu.
 - Text OCR screenshotu plateb zůstává dostupný pro vizuální kontrolu.
 - Započítávání plateb nejstaršímu neuhrazenému řádnému pojistnému.
@@ -29,6 +32,8 @@ Aby bylo možné načíst podporované formáty a provést OCR, aplikace stahuje
 
 ## Důležitá omezení
 
+- Ani 20 shodných OCR průchodů není samo o sobě matematický důkaz správnosti. Proto se současně kontroluje sazba, výpočtový základ, předpisy, datumy a návaznost čtvrtletí.
+- Pokud se 20 OCR průchodů neshodne, Excel se nevygeneruje; nahraj kvalitnější nebo těsněji oříznutý obrázek. Ruční editace hodnot sama neshodu OCR nepřepíše.
 - OCR nemusí vždy správně přečíst malé částky nebo tabulky; před výpočtem zkontroluj a oprav hodnoty.
 - U PDF a Word dokumentů závisí rozpoznání tabulek na jejich rozložení. Pokud parser nenajde všechny řádky, doplň je ručně.
 - Starý formát DOC není podporován; převeď jej na DOCX nebo PDF.
