@@ -13,6 +13,8 @@ Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kont
 - Čtení textové vrstvy PDF; u skenovaných PDF lokální OCR vykreslených stránek.
 - Čtení XLSX/XLS/CSV, DOCX a textových/HTML souborů.
 - Ruční oprava rozpoznaných plateb a čtvrtletních předpisů před výpočtem.
+- Samostatné sloupce pro požadovanou částku platby a skutečně vyřízenou částku; nulově vyřízené platby se nezapočítají, ale zůstanou ve vstupním auditu.
+- Text OCR screenshotu plateb zůstává dostupný pro vizuální kontrolu.
 - Započítávání plateb nejstaršímu neuhrazenému řádnému pojistnému.
 - Evidence navýšení za prodlení odděleně; platby se na navýšení použijí až po uhrazení řádného pojistného.
 - Výpočet navýšení podle vzorců z dodané šablony: podíl 10 % za každý kalendářní měsíc mezi měsícem splatnosti a měsícem platby, pokud je platba po splatnosti; zaokrouhlení na celé Kč.
