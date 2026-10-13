@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: read
   pages: write
   id-token: write
@@ -23,6 +24,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Cancel stale Pages runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          stale_runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" --jq ".workflow_runs[] | select(.id != ${CURRENT_RUN_ID} and .name == \"Deploy static app to GitHub Pages\" and (.status == \"in_progress\" or .status == \"queued\" or .status == \"pending\")) | .id")
+          for run_id in $stale_runs; do
+            echo "Cancelling stale Pages run $run_id"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id/cancel" || true
+          done
+          sleep 8
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:
