@@ -642,7 +642,9 @@
     const resultRows = grouped.map(row=>{
       const rowWords = row.words;
       const line = rowWords.map(w=>w.text).join(" ");
-      const q = quarterMatch(line);
+      const quarterLabels = Array.from(line.matchAll(/(?:\bQ\s*[1-4]\s*[\/.\-]\s*\d{2,4}\b|\b[1-4]\s*Q\s*[\/.\-]\s*\d{2,4}\b)/gi), m => quarterMatch(m[0])).filter(Boolean);
+      const q = quarterLabels[0] || quarterMatch(line);
+      const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
       const dates = dateMatches(line);
       let rowBaseLeft = baseLeft;
       if (previousX == null) {
@@ -657,7 +659,7 @@
       const premiumWords = rowWords.filter(w=>w.cx >= boundary);
       const base = numberInCell(baseWords);
       const premium = numberInCell(premiumWords);
-      return { period:q ? q.period : "", dueDate:dates.length ? toISO(dates[0].text) : "", base, premium, y:row.meanY, line };
+      return { period:q ? q.period : "", sourcePeriod, dueDate:dates.length ? toISO(dates[0].text) : "", base, premium, y:row.meanY, line };
     }).filter(row=>row.base > 0 && row.premium > 0 && row.base <= 10000000 && row.premium < 100000);
     return {
       rows:resultRows,
@@ -669,6 +671,24 @@
   function correctQuarterValuesFromPositions(quarters, positionedPages) {
     const pages = (positionedPages || []).map(page=>positionRowsFromData(page.data || page)).filter(p=>p.rows.length);
     const rows = pages.flatMap(p=>p.rows).sort((a,b)=>a.y-b.y);
+    // Important fallback: if text OCR could not recognize the table rows, build them
+    // from cell positions. This avoids returning an empty quarters table even though
+    // the base/premium cells were recognized spatially.
+    if (quarters.length === 0) {
+      const generated = rows
+        .filter(row => row.period && row.base > 0 && row.premium > 0)
+        .map(row => ({
+          period: normalizeQuarterLabel(row.period),
+          dueDate: row.dueDate || "",
+          sourcePeriod: row.sourcePeriod || "",
+          base: row.base,
+          premium: Math.round(row.premium),
+          raw: "Načteno podle polohy buněk: " + row.line
+        }));
+      const unique = [];
+      generated.forEach(row => { if (!unique.some(q => q.period === row.period)) unique.push(row); });
+      quarters.push(...unique);
+    }
     const byPeriod = new Map();
     rows.forEach(row=>{ if(row.period) byPeriod.set(row.period,row); });
     const hasPeriodRows = quarters.length > 0 && quarters.every(q=>byPeriod.has(normalizeQuarterLabel(q.period)));
