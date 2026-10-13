@@ -576,7 +576,9 @@
         const canvas = document.createElement("canvas");
         canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
         await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-        allLines.push(await ocrImageBlob(canvas, "PDF nemá čitelnou textovou vrstvu; rozpoznávám stránku " + pageNo + " pomocí OCR."));
+        const pageOcr = await ocrImageConsensus(canvas, "PDF · stránka " + pageNo + " z " + pdf.numPages, "quarters");
+        state.basePageOcrChecks.push(pageOcr.consensus);
+        allLines.push(pageOcr.text);
       }
     }
     return allLines.join("\n\n");
@@ -630,18 +632,53 @@
     if (!state.paymentFile || !state.baseFile) return;
     $("readButton").disabled = true;
     $("reviewPanel").hidden = true; $("resultsPanel").hidden = true;
+    $("verificationPanel").hidden = true;
     state.payments = []; state.quarters = []; state.results = null;
+    state.paymentConsensus = null; state.baseConsensus = null; state.basePageOcrChecks = [];
     try {
-      setStatus("Čtu screenshot plateb", "Soubor se zpracovává lokálně.", true);
-      state.paymentOcrText = await parseImageForText(state.paymentFile);
+      const paymentScan = await ocrImageConsensus(state.paymentFile, "Screenshot plateb", "payments");
+      state.paymentConsensus = paymentScan.consensus;
+      state.paymentOcrText = paymentScan.text;
       state.payments = parsePaymentText(state.paymentOcrText);
       $("paymentOcrText").textContent = state.paymentOcrText || "Ze screenshotu nebyl rozpoznán text.";
-      setStatus("Čtu základní dokument", "Extrahuji tabulku čtvrtletí a předpisů.", true);
-      const gridResult = await readGridFile(state.baseFile);
-      state.baseText = await readTextFile(state.baseFile);
+
+      setStatus("Čtu základní dokument", "Načítám data v prohlížeči a ověřuji jejich soulad.", true);
+      const ext = state.baseFile.name.split(".").pop().toLowerCase();
+      const isImage = ["png","jpg","jpeg","webp","gif"].includes(ext) || state.baseFile.type.startsWith("image/");
+      let gridResult = null;
+      if (isImage) {
+        const baseScan = await ocrImageConsensus(state.baseFile, "Základní tabulka", "quarters");
+        state.baseConsensus = baseScan.consensus;
+        state.baseText = baseScan.text;
+        state.quarters = parseQuartersFromText(state.baseText);
+      } else {
+        gridResult = await readGridFile(state.baseFile);
+        state.baseText = await readTextFile(state.baseFile);
+        state.quarters = gridResult && gridResult.quarters.length ? gridResult.quarters : parseQuartersFromText(state.baseText);
+        if (gridResult && gridResult.quarters.length) {
+          state.baseConsensus = {
+            mode: "Strukturovaná data",
+            total: 20,
+            unanimous: true,
+            matchingRuns: 20,
+            differences: [],
+            details: [],
+            note: "Buňky souboru byly načteny přímo, bez OCR. Následuje kontrola struktury a výpočtových vazeb."
+          };
+        } else {
+          state.baseConsensus = textParserConsensus(state.baseText, "quarters");
+        }
+        if (state.basePageOcrChecks.some(check => !check.unanimous)) {
+          state.baseConsensus = {
+            ...state.baseConsensus,
+            unanimous: false,
+            differences: (state.baseConsensus.differences || []).concat("Nejméně jedna naskenovaná stránka PDF neměla shodný výsledek při 20 OCR čteních.")
+          };
+        }
+      }
+
       state.sourceRate = gridResult && gridResult.rate != null ? gridResult.rate : extractRate(state.baseText);
       state.sourceRateLabel = state.sourceRate != null ? "Sazba rozpoznána ze základního dokumentu" : "Sazba nebyla rozpoznána";
-      state.quarters = gridResult && gridResult.quarters.length ? gridResult.quarters : parseQuartersFromText(state.baseText);
       const detectedTextRate = extractRate(state.baseText);
       if (state.sourceRate == null && detectedTextRate != null) state.sourceRate = detectedTextRate;
       if (state.sourceRate != null) {
@@ -649,22 +686,27 @@
         $("rateSource").textContent = state.sourceRateLabel;
       } else {
         $("rateInput").value = "";
-        $("rateSource").textContent = "Sazba nebyla rozpoznána; doplň ji pouze pokud v podkladu chybí pojistné.";
+        $("rateSource").textContent = "Sazba nebyla rozpoznána; doplň ji jen tehdy, pokud není uvedeno řádné pojistné.";
       }
       renderInputTables();
       $("sourceText").textContent = (state.baseText || "Z dokumentu nebyl získán žádný text.").slice(0, 35000);
       $("reviewPanel").hidden = false;
       $("reviewPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+
+      refreshVerification();
       const notes = [];
-      if (!state.payments.length) notes.push("Nepodařilo se spolehlivě rozpoznat platby.");
-      if (state.unparsedPaymentLines.length) notes.push(state.unparsedPaymentLines.length + " řádků screenshotu se nepodařilo spolehlivě zařadit. Zkontroluj rozpoznaný text níže.");
+      if (!state.payments.length) notes.push("Nepodařilo se rozpoznat žádné platby.");
+      if (!state.paymentConsensus.unanimous) notes.push("20 OCR čtení screenshotu plateb se neshodlo.");
+      if (state.unparsedPaymentLines.length) notes.push(state.unparsedPaymentLines.length + " řádků screenshotu zůstalo nezařazených.");
       if (!state.quarters.length) notes.push("Nepodařilo se rozpoznat čtvrtletní předpisy.");
-      setStatus(notes.length ? "Podklady načteny s upozorněním" : "Podklady načteny", notes.length ? notes.join(" ") + " Doplň nebo oprav tabulky ručně." : "Zkontroluj částky, data a čtvrtletí před výpočtem.", false);
+      if (!state.baseConsensus.unanimous) notes.push("Kontrolní čtení základního dokumentu se neshodla.");
+      setStatus(notes.length ? "Podklady načteny – výpočet zatím blokován" : "Podklady načteny", notes.length ? notes.join(" ") + " Ověř podklady; Excel se do úspěšné kontroly nevytvoří." : "Načtená data prošla úvodní kontrolou. Dokonči 20bodovou validaci.", false);
       $("spinner").hidden = false;
       $("readButton").disabled = false;
     } catch (error) {
       console.error(error);
       setStatus("Zpracování se nepodařilo", error && error.message ? error.message : "Soubor se nepodařilo načíst.", false);
+      $("spinner").hidden = true;
       $("readButton").disabled = false;
     }
   }
