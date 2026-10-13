@@ -200,12 +200,13 @@
       const uniqueVals = vals.filter((v, i) => vals.findIndex(x => Math.abs(x - v) < 0.005) === i);
       // The source table has requested amount first and "Vyřízeno" second.
       // Prefer the final numeric token in the row; 0 means not actually processed.
-      const amount = uniqueVals.length === 1 ? uniqueVals[0] : tokens[tokens.length - 1].value;
-      if (amount == null || amount < 0) {
+      const amount = tokens[tokens.length - 1].value;
+      const requestedAmount = tokens[0].value;
+      if (amount == null || amount < 0 || requestedAmount == null || requestedAmount < 0) {
         unparsed.push(line);
         return;
       }
-      const normalized = { date, amount: Math.round(amount * 100) / 100, raw: line };
+      const normalized = { date, requestedAmount: Math.round(requestedAmount * 100) / 100, amount: Math.round(amount * 100) / 100, raw: line };
       if (!parsed.some(p => p.date === normalized.date && p.amount === normalized.amount && p.raw === normalized.raw)) parsed.push(normalized);
     });
     state.unparsedPaymentLines = unparsed;
@@ -545,7 +546,8 @@
     state.payments.forEach((payment, i) => {
       const tr = document.createElement("tr");
       addInputCell(tr, "date", payment.date, "Datum platby " + (i + 1), value => { payment.date = value; invalidateResults(); });
-      addInputCell(tr, "number", payment.amount, "Částka platby " + (i + 1), value => { payment.amount = parseAmount(value); invalidateResults(); }, "0.01");
+      addInputCell(tr, "number", payment.requestedAmount == null ? payment.amount : payment.requestedAmount, "Částka platby " + (i + 1), value => { payment.requestedAmount = parseAmount(value); invalidateResults(); }, "0.01");
+      addInputCell(tr, "number", payment.amount, "Vyřízená částka " + (i + 1), value => { payment.amount = parseAmount(value); invalidateResults(); }, "0.01");
       const rawTd = document.createElement("td");
       const raw = element("span", { className: "raw-text", title: payment.raw || "" }, payment.raw || "Ruční záznam");
       rawTd.appendChild(raw); tr.appendChild(rawTd);
@@ -594,7 +596,7 @@
   }
 
   $("addPayment").addEventListener("click", () => {
-    state.payments.push({ date: isoToday(), amount: "", raw: "Ruční záznam" });
+    state.payments.push({ date: isoToday(), requestedAmount: "", amount: "", raw: "Ruční záznam" });
     renderInputTables(); invalidateResults();
   });
   $("addQuarter").addEventListener("click", () => {
@@ -751,7 +753,7 @@
       if (anyMissingPremium) warnings.push("Chybí sazba nebo předpis pojistného; výpočet nepoužívej, dokud údaje nedoplníš.");
     }
 
-    return { asOf, quarters, payments, detail, totals, warnings };
+    return { asOf, quarters, payments, paymentRows: allPayments, detail, totals, warnings };
   }
 
   function renderResults(result) {
@@ -968,18 +970,18 @@
 
     const inputs = workbook.addWorksheet("Vstupní data", { views: [{ state: "frozen", ySplit: 1 }] });
     inputs.addRow(["PŮVODNÍ PLATBY"]); styleHeader(inputs.getRow(1));
-    inputs.addRow(["Datum platby","Částka (Kč)","Rozpoznaný řádek"]);
+    inputs.addRow(["Datum platby","Částka platby (Kč)","Vyřízeno (Kč)","Započteno jako platba?","Rozpoznaný řádek"]);
     styleHeader(inputs.getRow(2));
-    r.payments.forEach(p => inputs.addRow([dateFmt(p.date), Number(p.amount), p.raw || "Ruční záznam"]));
+    r.paymentRows.forEach(p => inputs.addRow([dateFmt(p.date), Number(p.requestedAmount == null ? p.amount : p.requestedAmount), Number(p.amount), Number(p.amount) > 0 ? "Ano" : "Ne — 0 Kč vyřízeno", p.raw || "Ruční záznam"]));
     const qStart = inputs.rowCount + 2;
     inputs.addRow([]);
     inputs.addRow(["PŘEDPISY POJISTNÉHO"]); styleHeader(inputs.getRow(inputs.rowCount));
     inputs.addRow(["Čtvrtletí","Splatnost","Období pro výpočet","Základ (Kč)","Řádné pojistné (Kč)","Původní řádek"]);
     styleHeader(inputs.getRow(inputs.rowCount));
     r.quarters.forEach(q => inputs.addRow([q.period, dateFmt(q.dueDate), q.sourcePeriod || "", q.base || "", q.premium, q.raw || "Ruční záznam"]));
-    inputs.columns = [{width:18},{width:20},{width:22},{width:20},{width:22},{width:72}];
+    inputs.columns = [{width:18},{width:21},{width:18},{width:26},{width:72},{width:22}];
     styleBodyRows(inputs, 3);
-    inputs.autoFilter = { from: "A2", to: "C" + (2 + r.payments.length) };
+    inputs.autoFilter = { from: "A2", to: "E" + (2 + r.paymentRows.length) };
 
     const warnings = workbook.addWorksheet("Kontrola");
     warnings.columns = [{width:22},{width:100}];
