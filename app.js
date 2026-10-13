@@ -472,9 +472,16 @@
           await worker.setParameters({ tessedit_pageseg_mode: psmModes[pi] });
           const result = await worker.recognize(variants[vi]);
           const text = result && result.data ? result.data.text || "" : "";
-          const signature = canonicalOcrSignature(kind, text);
-          const parsedCount = kind === "payments" ? parsePaymentText(text).length : parseQuartersFromText(text).length;
-          rounds.push({ number, text, data: result && result.data ? result.data : null, signature, parsedCount, score: parsedCount * 10000 + text.length });
+          const data = result && result.data ? result.data : null;
+          const positionResult = kind === "quarters" && data ? positionRowsFromData(data) : null;
+          const usePositionSignature = Boolean(positionResult && positionResult.rows.length);
+          const signature = usePositionSignature
+            ? JSON.stringify(positionResult.rows.map(row => [row.period, row.dueDate, row.base, row.premium]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))
+            : canonicalOcrSignature(kind, text);
+          const parsedCount = kind === "payments"
+            ? parsePaymentText(text).length
+            : Math.max(parseQuartersFromText(text).length, positionResult ? positionResult.rows.length : 0);
+          rounds.push({ number, text, data, signature, parsedCount, positionCount:positionResult ? positionResult.rows.length : 0, score: parsedCount * 10000 + (usePositionSignature ? 5000 : 0) + text.length });
         } catch (error) {
           rounds.push({ number, text: "", signature: "OCR_ERROR_" + number, parsedCount: 0, score: 0, error: error && error.message ? error.message : String(error) });
         }
