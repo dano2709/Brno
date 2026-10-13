@@ -1130,6 +1130,13 @@
 
   $("calculateButton").addEventListener("click", () => {
     try {
+      const tests = refreshVerification();
+      const failed = tests.filter(test => !test.pass);
+      if (tests.length !== 20 || failed.length) {
+        setStatus("Výpočet zablokován", "Nejdříve musí projít všech 20 kontrol. Neúspěšné: " + failed.map(test => test.name).join("; "), false);
+        $("spinner").hidden = true;
+        return;
+      }
       state.results = computeResults();
       renderResults(state.results);
       setStatus("Výpočet dokončen", "Zkontroluj souhrn, varování a rozpis započtení. Excel stáhni až po ověření výsledků.", false);
@@ -1163,6 +1170,12 @@
   }
 
   async function downloadWorkbook() {
+    const tests = refreshVerification();
+    if (tests.length !== 20 || tests.some(test => !test.pass)) {
+      setStatus("Export zablokován", "Excel nelze vytvořit, dokud není všech 20 kontrol úspěšných.", false);
+      $("spinner").hidden = true;
+      return;
+    }
     if (!state.results) return;
     if (!window.ExcelJS) {
       setStatus("Exportní knihovna není dostupná", "Zkontroluj připojení k internetu a zkus export znovu.", false);
