@@ -90,6 +90,20 @@
       <div><strong id="statusTitle">Zpracovávám podklady</strong><p id="statusText"></p></div>
     </div>
 
+    <section class="verification-panel" id="verificationPanel" hidden>
+      <div class="verification-top">
+        <div>
+          <p class="eyebrow">KONTROLA SPOLEHLIVOSTI</p>
+          <h3 id="verificationTitle">20 kontrolních testů</h3>
+          <p id="verificationSubtitle">Excel se nepovolí, pokud nesedí načtená data nebo se OCR varianty neshodnou.</p>
+        </div>
+        <span class="verification-score waiting" id="verificationScore">Čeká</span>
+      </div>
+      <div class="verification-progress"><span id="verificationProgress"></span></div>
+      <div class="verification-results" id="verificationResults"></div>
+      <p class="verification-foot" id="verificationFoot">Kontrola ještě nebyla spuštěna.</p>
+    </section>
+
     <section class="review-panel" id="reviewPanel" hidden>
       <div class="section-heading">
         <div><p class="eyebrow">KROK 2</p><h2>Zkontroluj rozpoznaná data</h2><p class="section-copy">Tabulky můžeš před výpočtem upravit. Nejasné částky nebo data vždy oprav podle původního podkladu.</p></div>
