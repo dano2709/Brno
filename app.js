@@ -1101,7 +1101,7 @@
     state.verificationTests = tests;
     const passed = tests.filter(test => test.pass).length;
     $("verificationTitle").textContent = "20 kontrolních testů";
-    $("verificationSubtitle").textContent = "Výpočet a export se odemknou až po úspěšném dokončení všech kontrol.";
+    $("verificationSubtitle").textContent = "Kontroly upozorňují na možná rizika. Výpočet můžeš spustit i při neúspěšných testech.";
     $("verificationScore").textContent = passed + "/20 úspěšných";
     $("verificationScore").className = "verification-score " + (passed === 20 ? "pass" : "fail");
     $("verificationProgress").style.width = (passed / 20 * 100) + "%";
@@ -1123,9 +1123,9 @@
     const foot = $("verificationFoot");
     foot.classList.toggle("blocked", failures.length > 0);
     foot.textContent = failures.length
-      ? "Výpočet je BLOKOVÁN. Neúspěšné kontroly: " + failures.map(test => test.name).join("; ") + ". Oprav podklad nebo načti čitelnější originál."
-      : "Všech 20 testů prošlo. Je možné pokračovat k výpočtu; výsledek stále zkontroluj před exportem.";
-    $("calculateButton").disabled = failures.length > 0;
+      ? "UPOZORNĚNÍ: " + failures.length + " z 20 kontrol neprošlo. Výpočet je dostupný, ale ověř neúspěšné kontroly a výsledné částky před použitím."
+      : "Všech 20 testů prošlo. Výsledek přesto zkontroluj před použitím.";
+    $("calculateButton").disabled = false;
     return tests;
   }
 
@@ -1339,12 +1339,12 @@
     try {
       const tests = refreshVerification();
       const failed = tests.filter(test => !test.pass);
-      if (tests.length !== 20 || failed.length) {
-        setStatus("Výpočet zablokován", "Nejdříve musí projít všech 20 kontrol. Neúspěšné: " + failed.map(test => test.name).join("; "), false);
-        $("spinner").hidden = true;
-        return;
-      }
       state.results = computeResults();
+      if (failed.length) {
+        state.results.warnings = (state.results.warnings || []).concat(
+          "Před výpočtem neprošlo " + failed.length + " z 20 kontrol: " + failed.map(test => test.name).join("; ") + ". Výsledek pečlivě ověř před použitím."
+        );
+      }
       renderResults(state.results);
       setStatus("Výpočet dokončen", "Zkontroluj souhrn, varování a rozpis započtení. Excel stáhni až po ověření výsledků.", false);
       $("spinner").hidden = false;
@@ -1377,12 +1377,7 @@
   }
 
   async function downloadWorkbook() {
-    const tests = refreshVerification();
-    if (tests.length !== 20 || tests.some(test => !test.pass)) {
-      setStatus("Export zablokován", "Excel nelze vytvořit, dokud není všech 20 kontrol úspěšných.", false);
-      $("spinner").hidden = true;
-      return;
-    }
+    refreshVerification();
     if (!state.results) return;
     if (!window.ExcelJS) {
       setStatus("Exportní knihovna není dostupná", "Zkontroluj připojení k internetu a zkus export znovu.", false);
