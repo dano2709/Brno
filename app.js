@@ -338,22 +338,13 @@
     const worker = await getOcrWorker();
     setStatus("Rozpoznávám text", label || "Probíhá lokální OCR obrázku.", true);
     let input = blob;
-    if (window.createImageBitmap && window.OffscreenCanvas) {
-      try {
-        const bitmap = await createImageBitmap(blob);
-        const factor = Math.min(3, Math.max(1, 1800 / Math.max(bitmap.width, bitmap.height)));
-        const canvas = new OffscreenCanvas(Math.round(bitmap.width * factor), Math.round(bitmap.height * factor));
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-        input = canvas;
-        bitmap.close();
-      } catch (_) {}
-    } else if (window.createImageBitmap) {
+    if (window.createImageBitmap) {
       try {
         const bitmap = await createImageBitmap(blob);
         const factor = Math.min(3, Math.max(1, 1800 / Math.max(bitmap.width, bitmap.height)));
         const canvas = document.createElement("canvas");
-        canvas.width = Math.round(bitmap.width * factor); canvas.height = Math.round(bitmap.height * factor);
+        canvas.width = Math.round(bitmap.width * factor);
+        canvas.height = Math.round(bitmap.height * factor);
         canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
         input = canvas;
         bitmap.close();
@@ -703,6 +694,11 @@
       seen.set(key, (seen.get(key) || 0) + 1);
     });
     if (Array.from(seen.values()).some(n => n > 1)) warnings.push("Ve vstupu jsou stejné částky se stejným datem vícekrát. Ověř, že nejde o duplicitně načtenou platbu.");
+    const detectedRate = parseAmount($("rateInput").value);
+    const impliedRates = quarters.filter(q => q.base > 0 && q.premium > 0).map(q => q.premium / q.base * 1000).filter(x => Number.isFinite(x) && x > 0);
+    if (detectedRate != null && impliedRates.length) {
+      const meanRate = impliedRates.reduce((sum,x) => sum + x, 0) / impliedRates.length;
+      if (Math.abs(detectedRate - meanRate) > 0.4) warnings.push("Sazba " + detectedRate.toLocaleString("cs-CZ") + " ‰ se výrazně liší od poměru základu a předpisů v tabulce (orientačně " + meanRate.toLocaleString("cs-CZ", { maximumFractionDigits: 2 }) + " ‰). Ověř, zda sazba i čtvrtletní předpisy patří ke stejnému případu.");
     if (state.sourceRate == null && !($("rateInput").value.trim())) {
       const anyMissingPremium = quarters.some(q => !(q.premium > 0));
       if (anyMissingPremium) warnings.push("Chybí sazba nebo předpis pojistného; výpočet nepoužívej, dokud údaje nedoplníš.");
@@ -826,13 +822,83 @@
     styleBodyRows(summary, 5);
     summary.getColumn(2).numFmt = "#,##0;[Red]-#,##0";
     summary.addRow([]);
-    const notice = summary.addRow(["Poznámka", "Navýšení za prodlení je počítáno podle vzorce ze vzorového sešitu: 10 % za každý započatý kalendářní měsíc po splatnosti, s účetním zaokrouhlením na celé Kč."]);
+    const notice = summary.addRow(["Poznámka", "Navýšení za prodlení je počítáno podle vzorce ze vzorového sešitu: 10 % za každý kalendářní měsíc mezi měsícem splatnosti a měsícem platby (pouze pokud je platba po splatnosti), s zaokrouhlením na celé Kč."]);
     notice.getCell(1).font = { bold: true, color: { argb: "FF77521B" } };
     notice.getCell(2).alignment = { wrapText: true, vertical: "top" };
     summary.mergeCells("B" + notice.number + ":F" + notice.number);
     notice.height = 37;
 
-    const calc = workbook.addWorksheet("Výpočet", { views: [{ state: "frozen", ySplit: 1 }] });
+    const legacy = workbook.addWorksheet("List1", { views: [{ state: "frozen", ySplit: 4 }] });
+    legacy.columns = [{width:13},{width:14},{width:15},{width:18},{width:14},{width:14},{width:14},{width:13},{width:12},{width:14},{width:14}];
+    const topRow = legacy.addRow(["IČ", "", "", "Vznik pojištění", "", "", "", "sazba:", Number($("rateInput").value) || "", "promile", ""]);
+    topRow.getCell(1).font = { bold: true, color: { argb: "FF102E46" } };
+    topRow.getCell(8).font = { bold: true, color: { argb: "FF102E46" } };
+    topRow.getCell(9).numFmt = "0.0";
+    legacy.addRow([]);
+    const legacyHeader = legacy.addRow(["Pojistné", "Splatnost", "Z vyměřovacích základů", "", "Pojistné", "Zaplaceno", "částka", "Zpoždění", "Zvýšení", "částka", "Celkem"]);
+    styleHeader(legacyHeader);
+    const legacySub = legacy.addRow(["na kvartál", "", "", "", "", "dne", "", "v měsících", "%", "částka", ""]);
+    legacySub.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FF526775" }, size: 9 };
+      cell.alignment = { vertical: "middle", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF0F3" } };
+    });
+    const legacyRows = [];
+    const shortQuarter = value => {
+      const m = String(value || "").match(/^Q([1-4])\/(\d{4})$/i);
+      return m ? m[1] + "Q/" + m[2].slice(-2) : String(value || "");
+    };
+    r.quarters.forEach(q => {
+      const paymentAllocations = q.allocations.filter(a => a.type === "Úhrada řádného pojistného");
+      const openFeeMonths = monthsLate(q.dueDate, r.asOf);
+      const makeRow = (first, allocation, openFee) => {
+        const delay = allocation ? allocation.delayMonths : (openFee ? openFeeMonths : null);
+        const fee = allocation ? allocation.fee : (openFee ? q.feeOnOutstanding : 0);
+        const row = [
+          first ? shortQuarter(q.period) : "",
+          first ? (parseDate(q.dueDate) || "") : "",
+          first ? shortQuarter(q.sourcePeriod) : "",
+          first ? (q.base || "") : "",
+          first ? q.premium : "",
+          allocation ? (parseDate(allocation.date) || "") : "",
+          allocation ? Math.round(allocation.amount) : "",
+          delay == null ? "" : String(delay),
+          delay == null ? "" : delay / 10,
+          Math.round(fee || 0),
+          first ? Math.round(q.premium + (fee || 0)) : Math.round(fee || 0)
+        ];
+        legacyRows.push(row);
+      };
+      if (paymentAllocations.length) {
+        paymentAllocations.forEach((allocation, i) => makeRow(i === 0, allocation, false));
+        if (q.remaining > 0) makeRow(false, null, true);
+      } else {
+        makeRow(true, null, q.remaining > 0);
+      }
+      legacyRows.push(Array(11).fill(""));
+    });
+    legacyRows.forEach(values => {
+      const row = legacy.addRow(values);
+      row.alignment = { vertical: "middle", wrapText: true };
+      row.eachCell(cell => {
+        cell.border = { bottom: { style: "hair", color: { argb: "FFE3EAEE" } } };
+        if (row.number % 2 === 0) cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7FAFB" } };
+      });
+      row.getCell(2).numFmt = "dd.mm.yyyy";
+      row.getCell(6).numFmt = "dd.mm.yyyy";
+      row.getCell(9).numFmt = "0%";
+      [4,5,7,10,11].forEach(ci => { row.getCell(ci).numFmt = "#,##0;[Red]-#,##0"; });
+    });
+    const legacyTotal = legacy.addRow(["Celkem", "", "", "", r.totals.premium, "", r.totals.principalPaid, "", "", r.totals.feeAssessed, r.totals.premium + r.totals.feeAssessed]);
+    legacyTotal.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: "FF102E46" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF0F3" } };
+      cell.border = { top: { style: "thin", color: { argb: "FF102E46" } } };
+    });
+    [5,7,10,11].forEach(ci => { legacyTotal.getCell(ci).numFmt = "#,##0;[Red]-#,##0"; });
+    legacy.autoFilter = { from: "A3", to: "K" + (legacy.rowCount - 1) };
+
+    const calc = workbook.addWorksheet("Přehled čtvrtletí", { views: [{ state: "frozen", ySplit: 1 }] });
     calc.columns = [
       {header:"Čtvrtletí",key:"period",width:14},{header:"Splatnost",key:"due",width:14},
       {header:"Období pro výpočet",key:"source",width:19},{header:"Výpočtový základ (Kč)",key:"base",width:21},
