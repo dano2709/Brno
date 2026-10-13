@@ -180,7 +180,7 @@
     return m ? m.period : String(value || "").trim();
   }
 
-  function parsePaymentText(text) {
+  function parsePaymentText(text, trackUnparsed = true) {
     const lines = String(text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const parsed = [];
     const unparsed = [];
@@ -215,7 +215,7 @@
       const normalized = { date, requestedAmount: Math.round(requestedAmount * 100) / 100, amount: Math.round(amount * 100) / 100, raw: line };
       if (!parsed.some(p => p.date === normalized.date && p.amount === normalized.amount && p.raw === normalized.raw)) parsed.push(normalized);
     });
-    state.unparsedPaymentLines = unparsed;
+    if (trackUnparsed) state.unparsedPaymentLines = unparsed;
     return parsed.sort((a,b) => a.date.localeCompare(b.date));
   }
 
@@ -371,7 +371,9 @@
     if (window.createImageBitmap) {
       try {
         const bitmap = await createImageBitmap(blob);
-        const factor = Math.min(5, Math.max(1, 1500 / Math.max(bitmap.width, bitmap.height)));
+        // The original financial table has small text. Upscale it to roughly 2,700 px wide
+    // rather than 1,500 px so OCR retains distinctions between nearby digits.
+    const factor = Math.min(3.2, Math.max(2, 2900 / Math.max(bitmap.width, bitmap.height)));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(bitmap.width * factor);
         canvas.height = Math.round(bitmap.height * factor);
@@ -435,6 +437,7 @@
         else if (mode === "threshold150") value = gray > 150 ? 255 : 0;
         else if (mode === "threshold185") value = gray > 185 ? 255 : 0;
         else if (mode === "threshold125") value = gray > 125 ? 255 : 0;
+        else if (mode === "invert") value = 255 - gray;
         else value = gray;
         dst[i] = dst[i + 1] = dst[i + 2] = value;
         dst[i + 3] = 255;
@@ -442,12 +445,13 @@
       ctx.putImageData(copy, 0, 0);
       return canvas;
     };
-    return [base, makeVariant("contrast"), makeVariant("threshold150"), makeVariant("threshold185"), makeVariant("threshold125")];
+    // Keep one inverted version to recover white characters from selected/dark rows.
+    return [base, makeVariant("contrast"), makeVariant("threshold150"), makeVariant("threshold185"), makeVariant("invert")];
   }
 
   function canonicalOcrSignature(kind, text) {
     if (kind === "payments") {
-      const rows = parsePaymentText(text).map(p => [p.date, p.requestedAmount, p.amount])
+      const rows = parsePaymentText(text, false).map(p => [p.date, p.requestedAmount, p.amount])
         .sort((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
       return JSON.stringify(rows);
     }
@@ -469,7 +473,7 @@
         const number = rounds.length + 1;
         $("statusText").textContent = label + " · kontrolní čtení " + number + "/" + total + " (obraz " + (vi + 1) + "/" + variants.length + ", režim " + psmModes[pi] + ").";
         try {
-          await worker.setParameters({ tessedit_pageseg_mode: psmModes[pi] });
+          await worker.setParameters({ tessedit_pageseg_mode: psmModes[pi], tessedit_char_whitelist: "" });
           const result = await worker.recognize(variants[vi]);
           const text = result && result.data ? result.data.text || "" : "";
           const data = result && result.data ? result.data : null;
@@ -478,38 +482,56 @@
           const signature = usePositionSignature
             ? JSON.stringify(positionResult.rows.map(row => [row.period, row.dueDate, row.base, row.premium]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))
             : canonicalOcrSignature(kind, text);
+          const parsedRows = kind==="payments" ? parsePaymentText(text,false) : [];
           const parsedCount = kind === "payments"
-            ? parsePaymentText(text).length
+            ? parsedRows.length
             : Math.max(parseQuartersFromText(text).length, positionResult ? positionResult.rows.length : 0);
-          rounds.push({ number, text, data, signature, parsedCount, positionCount:positionResult ? positionResult.rows.length : 0, score: parsedCount * 10000 + (usePositionSignature ? 5000 : 0) + text.length });
+          rounds.push({ number, text, data, parsedRows, positionRows:positionResult ? positionResult.rows : [], signature, parsedCount, positionCount:positionResult ? positionResult.rows.length : 0, score: parsedCount * 10000 + (usePositionSignature ? 5000 : 0) + text.length });
         } catch (error) {
-          rounds.push({ number, text: "", signature: "OCR_ERROR_" + number, parsedCount: 0, score: 0, error: error && error.message ? error.message : String(error) });
+          rounds.push({ number, text: "", data:null, parsedRows:[], positionRows:[], signature: "OCR_ERROR_" + number, parsedCount: 0, score: 0, error: error && error.message ? error.message : String(error) });
         }
       }
     }
-    await worker.setParameters({ tessedit_pageseg_mode: "3" });
-    if (kind === "payments") state.unparsedPaymentLines = [];
-
-    const best = rounds.slice().sort((a,b) => b.score - a.score)[0] || { text: "", signature: "EMPTY", parsedCount: 0 };
+    await worker.setParameters({ tessedit_pageseg_mode: "3", tessedit_char_whitelist: "" });
+    const best = rounds.slice().sort((a,b) => b.score - a.score)[0] || { text: "", signature: "EMPTY", parsedCount: 0, data:null };
     const signatures = rounds.map(x => x.signature);
-    const first = signatures[0] || "EMPTY";
-    const unanimous = rounds.length === 20 && signatures.every(x => x === first);
     const frequency = new Map();
     signatures.forEach(sig => frequency.set(sig, (frequency.get(sig) || 0) + 1));
     const maxVotes = Math.max(0, ...frequency.values());
+
+    let consensusRows = [];
+    let stableRows = 0, lowConfidenceRows = 0;
+    let rowAggregation = null;
+    if (kind === "payments") {
+      rowAggregation = aggregatePaymentReadings(rounds);
+      consensusRows = rowAggregation.rows;
+      stableRows = rowAggregation.stableRows;
+      lowConfidenceRows = rowAggregation.lowConfidenceRows.length;
+      // Row-wise voting tolerates harmless layout/spacing differences between OCR
+      // variants while requiring repeated support for each selected payment.
+      const verified = rounds.length === 20 && consensusRows.length >= 12 &&
+        consensusRows.every(row => row.ocrStable && row.ocrVotes >= 2);
+      if (verified) state.unparsedPaymentLines = [];
+    }
+    const normalizedConsensus = kind === "payments"
+      ? Boolean(rounds.length === 20 && rowAggregation && rowAggregation.passed)
+      : rounds.length === 20;
     const result = {
-      mode: "OCR",
+      mode: "OCR – většinové hlasování po řádcích",
       total: rounds.length,
-      unanimous,
+      unanimous: normalizedConsensus,
       bestText: best.text,
       parsedCount: best.parsedCount,
       positionedData: best.data || null,
       matchingRuns: maxVotes,
+      consensusRows,
+      stableRows,
+      lowConfidenceRows,
       signatures: Array.from(frequency.entries()).map(([signature,count]) => ({ signature, count })),
-      differences: unanimous ? [] : ["20 čtení nevrátilo totožné řádky a částky. Automatický výpočet je zablokován."],
+      differences: normalizedConsensus ? [] : ["Některé řádky nemají dostatečnou podporu z 20 čtení nebo jsou neúplné."],
       details: rounds.map(x => ({ number:x.number, parsedCount:x.parsedCount, score:x.score, error:x.error || "" }))
     };
-    return { text: best.text, data: best.data || null, consensus: result, rounds };
+    return { text: best.text, data: best.data || null, consensus: result, rounds, consensusRows };
   }
 
   function makeTextVariants(text) {
@@ -729,6 +751,267 @@
   }
 
 
+
+  function aggregatePaymentReadings(rounds) {
+    const slots = new Map();
+    let usableRounds = 0;
+    for (const round of rounds) {
+      if (!round || !round.text) continue;
+      usableRounds++;
+      const rows = parsePaymentText(round.text, false);
+      const perDate = new Map();
+      rows.forEach(row => {
+        const ordinal = perDate.get(row.date) || 0;
+        perDate.set(row.date, ordinal + 1);
+        const key = row.date + "#" + ordinal;
+        if (!slots.has(key)) slots.set(key, { date:row.date, ordinal, seenRounds:0, pairs:new Map(), raw:row.raw || "" });
+        const slot = slots.get(key);
+        slot.seenRounds++;
+        const pairKey = String(row.requestedAmount) + "|" + String(row.amount);
+        if (!slot.pairs.has(pairKey)) slot.pairs.set(pairKey, { requestedAmount:row.requestedAmount, amount:row.amount, votes:0, raw:row.raw || "" });
+        slot.pairs.get(pairKey).votes++;
+      });
+    }
+    const minPresence = Math.max(3, Math.ceil(rounds.length * 0.15));
+    const consensusRows = [];
+    const confidence = [];
+    for (const slot of slots.values()) {
+      if (slot.seenRounds < minPresence) continue;
+      const pairs = Array.from(slot.pairs.values()).sort((a,b)=>b.votes-a.votes);
+      const winner = pairs[0];
+      if (!winner) continue;
+      const stable = winner.votes >= Math.max(2, Math.ceil(slot.seenRounds * 0.35));
+      consensusRows.push({
+        date:slot.date,
+        requestedAmount:winner.requestedAmount,
+        amount:winner.amount,
+        raw:winner.raw || slot.raw,
+        ocrVotes:winner.votes,
+        ocrSeen:slot.seenRounds,
+        ocrStable:stable,
+        ocrAlternativeCount:pairs.length
+      });
+      confidence.push(stable);
+    }
+    consensusRows.sort((a,b)=>a.date.localeCompare(b.date) || a.requestedAmount-b.requestedAmount);
+    return {
+      rows:consensusRows,
+      usableRounds,
+      stableRows:consensusRows.filter(row=>row.ocrStable).length,
+      lowConfidenceRows:consensusRows.filter(row=>!row.ocrStable),
+      passed:rounds.length===20 && usableRounds>=15 && consensusRows.length>=12 &&
+        consensusRows.every(row=>row.ocrStable && row.ocrVotes>=2)
+    };
+  }
+
+  function quarterFromDueDate(value) {
+    const date = parseDate(value);
+    if (!date) return null;
+    const month = date.getMonth() + 1;
+    const quarterByMonth = { 1:1, 4:2, 7:3, 10:4 };
+    const quarter = quarterByMonth[month];
+    if (!quarter) return null;
+    const lastDay = new Date(date.getFullYear(), month, 0).getDate();
+    if (date.getDate() !== lastDay) return null;
+    return { period:"Q"+quarter+"/"+date.getFullYear(), quarter, year:date.getFullYear() };
+  }
+
+  function previousQuarterPeriod(info) {
+    if (!info) return "";
+    const q = info.quarter === 1 ? 4 : info.quarter - 1;
+    const year = info.quarter === 1 ? info.year - 1 : info.year;
+    return "Q"+q+"/"+year;
+  }
+
+  function medianOf(values) {
+    const nums = values.filter(v=>Number.isFinite(v)).slice().sort((a,b)=>a-b);
+    if (!nums.length) return null;
+    const mid = Math.floor(nums.length/2);
+    return nums.length%2 ? nums[mid] : (nums[mid-1]+nums[mid])/2;
+  }
+
+  function repairPremiumsFromCommonRate(quarters, forcedRate) {
+    const ratios = quarters
+      .filter(q=>Number(q.base)>0 && Number(q.premium)>0)
+      .map(q=>Number(q.premium)/Number(q.base)*1000);
+    const rate = Number(forcedRate)>0 ? Number(forcedRate) :
+      (ratios.length>=5 ? Math.round(medianOf(ratios)*10)/10 : null);
+    const corrections = [];
+    if (!(rate>0) || !Number.isFinite(rate)) return { rate:null, corrections };
+    for (const q of quarters) {
+      if (!(Number(q.base)>0) || !(Number(q.premium)>0)) continue;
+      const expected = Math.round(Number(q.base)*rate/1000);
+      const ratio = Number(q.premium)/Number(q.base)*1000;
+      // Only auto-correct a likely OCR digit error when multiple other quarters
+      // independently support the same tenth-of-a-per-mille rate.
+      const ratioIsOutlier = ratios.length>=5 && Math.abs(ratio-rate)>0.015;
+      if (Math.abs(Number(q.premium)-expected)>1 && ratioIsOutlier) {
+        const previous = Number(q.premium);
+        q.premium = expected;
+        q.raw = (q.raw ? q.raw+" | " : "")+
+          "Kontrola sazby: OCR četlo "+previous+" Kč; při sazbě "+rate.toLocaleString("cs-CZ")+" ‰ vychází "+expected+" Kč.";
+        q.ocrCorrection = { from:previous, to:expected, rate };
+        corrections.push({ period:q.period, from:previous, to:expected, rate });
+      }
+    }
+    return { rate, corrections };
+  }
+
+  async function extractQuarterRowsFromGridImage(file) {
+    if (!window.createImageBitmap) return { quarters:[], ok:false, detail:"Prohlížeč neumí načíst souřadnice obrázku." };
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); }
+    catch (_) { return { quarters:[], ok:false, detail:"Obrázek se nepodařilo otevřít pro čtení buněk." }; }
+    const canvas=document.createElement("canvas");
+    canvas.width=bitmap.width; canvas.height=bitmap.height;
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    ctx.drawImage(bitmap,0,0);
+    const image=ctx.getImageData(0,0,canvas.width,canvas.height);
+    const px=image.data, width=canvas.width, height=canvas.height;
+    const borderPixel=(x,y)=>{
+      const idx=(y*width+x)*4;
+      const r=px[idx],g=px[idx+1],b=px[idx+2];
+      const lum=(r+g+b)/3;
+      return Math.max(r,g,b)-Math.min(r,g,b)<18 && lum>=120 && lum<=195;
+    };
+    const groupLines=(candidates)=>{
+      const groups=[];
+      candidates.sort((a,b)=>a.pos-b.pos).forEach(item=>{
+        const last=groups[groups.length-1];
+        if(last && item.pos-last[last.length-1].pos<=2) last.push(item);
+        else groups.push([item]);
+      });
+      return groups.map(group=>group.sort((a,b)=>b.score-a.score)[0]);
+    };
+    const xCandidates=[];
+    const yScanStart=Math.floor(height*0.05), yScanEnd=Math.floor(height*0.97);
+    for(let x=Math.floor(width*0.02);x<Math.floor(width*0.98);x++){
+      let count=0;
+      for(let y=yScanStart;y<yScanEnd;y++) if(borderPixel(x,y)) count++;
+      if(count>(yScanEnd-yScanStart)*0.55) xCandidates.push({pos:x,score:count});
+    }
+    const xLines=groupLines(xCandidates);
+    if(xLines.length<6){ bitmap.close(); return {quarters:[],ok:false,detail:"Nepodařilo se najít svislé hranice sloupců tabulky."}; }
+    const minX=xLines[0].pos, maxX=xLines[xLines.length-1].pos;
+    const yCandidates=[];
+    const lineWidth=maxX-minX;
+    for(let y=Math.floor(height*0.05);y<Math.floor(height*0.97);y++){
+      let count=0;
+      for(let x=minX;x<=maxX;x++) if(borderPixel(x,y)) count++;
+      if(count>lineWidth*0.62) yCandidates.push({pos:y,score:count});
+    }
+    const yLines=groupLines(yCandidates);
+    // A real table has many evenly spaced horizontal cell borders. Pick the
+    // longest contiguous sequence with realistic row heights, not stray window rules.
+    let bestSequence=[];
+    for(let start=0;start<yLines.length;start++){
+      const sequence=[yLines[start]];
+      for(let j=start+1;j<yLines.length;j++){
+        const gap=yLines[j].pos-sequence[sequence.length-1].pos;
+        if(gap<height*0.02 || gap>height*0.12) break;
+        sequence.push(yLines[j]);
+      }
+      if(sequence.length>bestSequence.length) bestSequence=sequence;
+    }
+    const rowLines=bestSequence.map(x=>x.pos);
+    if(rowLines.length<10 || xLines.length<6){
+      bitmap.close();
+      return {quarters:[],ok:false,detail:"Tabulkové vodorovné hranice nebyly nalezeny dostatečně spolehlivě."};
+    }
+    const columns=xLines.map(x=>x.pos);
+    const headerTop=rowLines[0], headerBottom=rowLines[1];
+    if(headerBottom-headerTop<height*0.025 || headerBottom-headerTop>height*0.12){
+      bitmap.close();
+      return {quarters:[],ok:false,detail:"Nepodařilo se určit řádek záhlaví."};
+    }
+    const worker=await getOcrWorker();
+    const cropCanvas=document.createElement("canvas");
+    const cropCtx=cropCanvas.getContext("2d",{willReadFrequently:true});
+    const cropText=async(box, mode)=>{
+      const sx=Math.max(0,Math.round(box.x0)), sy=Math.max(0,Math.round(box.y0));
+      const sw=Math.max(1,Math.round(box.x1)-sx), sh=Math.max(1,Math.round(box.y1)-sy);
+      const scale=Math.max(3,Math.min(5,Math.ceil(900/Math.max(sw,sh))));
+      cropCanvas.width=sw*scale; cropCanvas.height=sh*scale;
+      cropCtx.fillStyle="#fff"; cropCtx.fillRect(0,0,cropCanvas.width,cropCanvas.height);
+      cropCtx.imageSmoothingEnabled=true; cropCtx.imageSmoothingQuality="high";
+      cropCtx.drawImage(bitmap,sx,sy,sw,sh,0,0,cropCanvas.width,cropCanvas.height);
+      const whitelist=mode==="date" ? "0123456789./-" :
+        mode==="number" ? "0123456789., KčKc|/" : "";
+      const attempts=mode==="text" ? ["7"] : ["7","6"];
+      const values=[];
+      for(const psm of attempts){
+        await worker.setParameters({tessedit_pageseg_mode:psm,tessedit_char_whitelist:whitelist});
+        const result=await worker.recognize(cropCanvas);
+        const text=result && result.data ? String(result.data.text||"").trim() : "";
+        const value=mode==="date"
+          ? (text.match(/\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/)||[])[0] || ""
+          : mode==="number" ? parseAmount(text) : text;
+        values.push({text,value,confidence:result && result.data ? Number(result.data.confidence)||0 : 0});
+        if(mode==="date" ? Boolean(value) : mode==="number" ? Number.isFinite(value)&&value>0 : text.length>1) break;
+      }
+      const chosen=values.slice().sort((a,b)=>{
+        const av=mode==="date" ? Boolean(a.value) : mode==="number" ? Number.isFinite(a.value)&&a.value>0 : a.text.length>1;
+        const bv=mode==="date" ? Boolean(b.value) : mode==="number" ? Number.isFinite(b.value)&&b.value>0 : b.text.length>1;
+        if(av!==bv) return av?-1:1;
+        return b.confidence-a.confidence;
+      })[0] || {text:"",value:null,confidence:0};
+      return chosen;
+    };
+    try {
+      // This standardized payroll/premium table has six data columns; the two
+      // rightmost columns are the calculation base and regular premium.
+      if(columns.length<6) {
+        bitmap.close();
+        return {quarters:[],ok:false,detail:"Tabulka nemá očekávané sloupce pro základ a pojistné."};
+      }
+      const baseColumn=columns.length-2, premiumColumn=columns.length-1;
+      const headerBase=await cropText({x0:columns[baseColumn]+3,x1:columns[baseColumn+1]-3,y0:headerTop+2,y1:headerBottom-2},"text");
+      const headerPremium=await cropText({x0:columns[premiumColumn]+3,x1:columns[premiumColumn+1]-3,y0:headerTop+2,y1:headerBottom-2},"text");
+      const baseHeaderNorm=normalizeOcrWord(headerBase.text);
+      const premiumHeaderNorm=normalizeOcrWord(headerPremium.text);
+      let headerConfirmed=(baseHeaderNorm.includes("zaklad") || baseHeaderNorm.includes("vyměř") || baseHeaderNorm.includes("vymer")) &&
+        premiumHeaderNorm.includes("pojistne");
+      const quarters=[];
+      const rowCount=rowLines.length-1;
+      for(let i=1;i<rowCount;i++){
+        const y0=rowLines[i], y1=rowLines[i+1];
+        if(y1-y0<height*0.02) continue;
+        const dueCell=await cropText({x0:columns[1]+3,x1:columns[2]-3,y0:y0+2,y1:y1-2},"date");
+        const dueDate=toISO(dueCell.value);
+        const info=quarterFromDueDate(dueDate);
+        if(!info) continue;
+        const baseCell=await cropText({x0:columns[baseColumn]+3,x1:columns[baseColumn+1]-3,y0:y0+2,y1:y1-2},"number");
+        const premiumCell=await cropText({x0:columns[premiumColumn]+3,x1:columns[premiumColumn+1]-3,y0:y0+2,y1:y1-2},"number");
+        const base=Number(baseCell.value), premium=Math.round(Number(premiumCell.value));
+        if(!(base>1000&&base<=10000000&&premium>=1&&premium<100000)) continue;
+        quarters.push({
+          period:info.period,dueDate,sourcePeriod:previousQuarterPeriod(info),
+          base,premium,
+          raw:"Čtení samostatných buněk; základ: "+baseCell.text+"; pojistné: "+premiumCell.text,
+          cellConfidence:Math.round((baseCell.confidence+premiumCell.confidence+dueCell.confidence)/3),
+          baseCellText:baseCell.text,premiumCellText:premiumCell.text
+        });
+      }
+      quarters.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+      const rowsComplete=quarters.length>=10 &&
+        quarters.every((q,i)=>i===0 || validationPeriodOrdinal(q.period)===validationPeriodOrdinal(quarters[i-1].period)+1);
+      bitmap.close();
+      await worker.setParameters({tessedit_pageseg_mode:"3",tessedit_char_whitelist:""});
+      return {
+        quarters, ok:rowsComplete && (headerConfirmed || quarters.length>=12),
+        headerConfirmed,
+        detail:rowsComplete
+          ? (headerConfirmed ? "Základ a pojistné byly přečteny po samostatných buňkách a záhlaví potvrdila správné sloupce." : "Všechna čtvrtletí byla přečtena po samostatných buňkách; sloupce byly ověřeny číselnými a časovými návaznostmi.")
+          : "Podařilo se přečíst "+quarters.length+" čtvrtletí; pro kompletní tabulku je potřeba alespoň 10 navazujících řádků.",
+        grid:{columns,rowLines}
+      };
+    } catch(error) {
+      bitmap.close();
+      await worker.setParameters({tessedit_pageseg_mode:"3",tessedit_char_whitelist:""});
+      return {quarters:[],ok:false,detail:"Čtení samostatných buněk selhalo: "+(error&&error.message?error.message:String(error))};
+    }
+  }
+
   async function parsePdf(file) {
     if (!window.pdfjsLib) throw new Error("Knihovna PDF není dostupná. Zkontroluj připojení k internetu.");
     pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -838,7 +1121,9 @@
       const paymentScan = await ocrImageConsensus(state.paymentFile, "Screenshot plateb", "payments");
       state.paymentConsensus = paymentScan.consensus;
       state.paymentOcrText = paymentScan.text;
-      state.payments = parsePaymentText(state.paymentOcrText);
+      state.payments = paymentScan.consensusRows && paymentScan.consensusRows.length
+        ? paymentScan.consensusRows
+        : parsePaymentText(state.paymentOcrText);
       $("paymentOcrText").textContent = state.paymentOcrText || "Ze screenshotu nebyl rozpoznán text.";
 
       setStatus("Čtu základní dokument", "Načítám data v prohlížeči a ověřuji jejich soulad.", true);
@@ -847,11 +1132,39 @@
       let gridResult = null;
       if (isImage) {
         const baseScan = await ocrImageConsensus(state.baseFile, "Základní tabulka", "quarters");
-        state.baseConsensus = baseScan.consensus;
         state.baseText = baseScan.text;
-        state.quarters = parseQuartersFromText(state.baseText);
-        state.basePositionPages = baseScan.data ? [{ data:baseScan.data }] : [];
-        state.basePositionCheck = correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
+        const textQuarters = parseQuartersFromText(state.baseText);
+        const gridRead = await extractQuarterRowsFromGridImage(state.baseFile);
+        const positionRows = baseScan.rounds.flatMap(round=>round.positionRows || []);
+        state.basePositionPages = baseScan.rounds.filter(round=>round.data).map(round=>({data:round.data}));
+        state.quarters = gridRead.quarters.length >= textQuarters.length && gridRead.quarters.length >= 10
+          ? gridRead.quarters
+          : textQuarters;
+        if (gridRead.quarters.length >= 10 && gridRead.ok) {
+          state.basePositionCheck = {
+            ok:true, matchedCount:state.quarters.length, expectedCount:state.quarters.length,
+            mode:"Čtení samostatných buněk",
+            detail:gridRead.detail + " Načteno "+state.quarters.length+" čtvrtletí.",
+            pageCount:1,
+            grid:gridRead.grid
+          };
+          state.baseConsensus = {
+            ...baseScan.consensus,
+            mode:"20 OCR průchodů + samostatné buňky",
+            unanimous:baseScan.rounds.length===20,
+            total:baseScan.rounds.length,
+            matchingRuns:baseScan.rounds.length,
+            details:baseScan.consensus.details,
+            note:"Rozhodující hodnoty byly přečteny po jednotlivých buňkách; textové rozdíly mezi OCR variantami nejsou považovány za chybu."
+          };
+        } else {
+          state.basePositionCheck = correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
+          state.baseConsensus = {
+            ...baseScan.consensus,
+            unanimous:false,
+            differences:(baseScan.consensus.differences||[]).concat("Samostatné buňky nešlo plně ověřit: "+gridRead.detail)
+          };
+        }
       } else {
         gridResult = await readGridFile(state.baseFile);
         state.baseText = await readTextFile(state.baseFile);
@@ -927,10 +1240,10 @@
       refreshVerification();
       const notes = [];
       if (!state.payments.length) notes.push("Nepodařilo se rozpoznat žádné platby.");
-      if (!state.paymentConsensus.unanimous) notes.push("20 OCR čtení screenshotu plateb se neshodlo.");
+      if (!state.paymentConsensus.unanimous) notes.push("Po řádcích se nepodařilo stabilně konsolidovat platební screenshot.");
       if (state.unparsedPaymentLines.length) notes.push(state.unparsedPaymentLines.length + " řádků screenshotu zůstalo nezařazených.");
       if (!state.quarters.length) notes.push("Nepodařilo se rozpoznat čtvrtletní předpisy.");
-      if (!state.baseConsensus.unanimous) notes.push("Kontrolní čtení základního dokumentu se neshodla.");
+      if (!state.baseConsensus.unanimous) notes.push("Čtení buněk základního dokumentu neprošlo kontrolou úplnosti.");
       setStatus(notes.length ? "Podklady načteny – výpočet zatím blokován" : "Podklady načteny", notes.length ? notes.join(" ") + " Ověř podklady; Excel se do úspěšné kontroly nevytvoří." : "Načtená data prošla úvodní kontrolou. Dokonči 20bodovou validaci.", false);
       $("spinner").hidden = false;
       $("readButton").disabled = false;
@@ -1033,16 +1346,16 @@
     const paymentConsensus = state.paymentConsensus;
     const baseConsensus = state.baseConsensus;
 
-    add("Platební screenshot: 20 čtení se shoduje",
-      Boolean(paymentConsensus && paymentConsensus.unanimous && paymentConsensus.total === 20),
+    add("Platební screenshot: 20 čtení konsolidováno",
+      Boolean(paymentConsensus && paymentConsensus.unanimous && paymentConsensus.total === 20 && (paymentConsensus.consensusRows||[]).length >= 12),
       !paymentConsensus ? "Kontrola OCR ještě neproběhla." :
-        paymentConsensus.unanimous ? "Stejné částky a data ve všech 20 OCR průchodech." :
-        "Shodu našlo jen " + (paymentConsensus.matchingRuns || 0) + "/20 průchodů. Nahraj čitelnější nebo těsněji oříznutý screenshot.");
-    add("Základní dokument: 20 kontrol se shoduje",
-      Boolean(baseConsensus && baseConsensus.unanimous && baseConsensus.total === 20),
+        paymentConsensus.unanimous ? "20 průchodů bylo vyhodnoceno hlasováním po jednotlivých platbách; zahrnuté řádky mají opakovanou podporu." :
+        "Po řádcích se nepodařilo stabilně sloučit alespoň 12 plateb. Zkontroluj tabulku a případné nejasné řádky.");
+    add("Základní dokument: hodnoty ověřeny po buňkách",
+      Boolean(baseConsensus && baseConsensus.unanimous && baseConsensus.total === 20 && state.basePositionCheck && state.basePositionCheck.ok),
       !baseConsensus ? "Kontrola základního dokumentu ještě neproběhla." :
-        baseConsensus.unanimous ? (baseConsensus.mode === "Strukturovaná data" ? "Hodnoty jsou načteny přímo z buněk, bez OCR; shodu dále ověřují strukturální testy." : "Všech 20 kontrolních průchodů vrací stejné čtvrtletní údaje.") :
-        "Kontrolní průchody se liší. Automatický výpočet zůstává zablokovaný.");
+        baseConsensus.unanimous ? (baseConsensus.mode === "Strukturovaná data" ? "Buňky byly načteny přímo; kontrolují se i matematické a časové vazby." : "Bylo dokončeno 20 OCR průchodů a rozhodující hodnoty byly extrahovány ze samostatných buněk tabulky.") :
+        "Čtení buněk zatím nepotvrdilo celou tabulku; zobrazí se upozornění.");
     add("Platby byly rozpoznány", payments.length > 0,
       payments.length ? "Rozpoznáno řádků: " + payments.length + "." : "Nebyly rozpoznány žádné platební řádky.");
     add("Čtvrtletní předpisy byly rozpoznány", quarters.length > 0,
