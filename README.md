@@ -16,7 +16,7 @@ Lokální webová aplikace pro načtení plateb, čtvrtletních předpisů, kont
 - Dvacet průchodů OCR nad pěti různými variantami obrazu a čtyřmi režimy rozložení stránky; strukturované tabulky se čtou přímo z buněk.
 - Čtení čtvrtletních tabulek podle polohy slov v obrázku/PDF: číslice se spojují pouze uvnitř buňky, takže základ `258 475` a pojistné `2 171 Kč` zůstávají oddělené.
 - Přesně 20 kontrolních bodů (shoda čtení podle sloupců, formát dat, návaznost čtvrtletí, věrohodnost základu, shoda pojistného se sazbou, duplicity a oddělení základ/pojistné).
-- Výpočet i export jsou zablokovány, pokud není OCR jednohlasné, nelze spárovat základ a pojistné po sloupcích nebo neprojde byť jediná z 20 kontrol.
+- Neúspěšné kontroly jsou upozornění, nikoli blokace: výpočet i export lze spustit i při neshodě OCR nebo neúspěšném validačním testu. Chybějící povinné hodnoty mohou samozřejmě znemožnit samotný matematický výpočet.
 - Samostatné sloupce pro požadovanou částku platby a skutečně vyřízenou částku; nulově vyřízené platby se nezapočítají, ale zůstanou ve vstupním auditu.
 - Text OCR screenshotu plateb zůstává dostupný pro vizuální kontrolu.
 - Započítávání plateb nejstaršímu neuhrazenému řádnému pojistnému.
