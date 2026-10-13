@@ -671,23 +671,28 @@
   function correctQuarterValuesFromPositions(quarters, positionedPages) {
     const pages = (positionedPages || []).map(page=>positionRowsFromData(page.data || page)).filter(p=>p.rows.length);
     const rows = pages.flatMap(p=>p.rows).sort((a,b)=>a.y-b.y);
-    // Important fallback: if text OCR could not recognize the table rows, build them
-    // from cell positions. This avoids returning an empty quarters table even though
-    // the base/premium cells were recognized spatially.
-    if (quarters.length === 0) {
-      const generated = rows
-        .filter(row => row.period && row.base > 0 && row.premium > 0)
-        .map(row => ({
-          period: normalizeQuarterLabel(row.period),
-          dueDate: row.dueDate || "",
-          sourcePeriod: row.sourcePeriod || "",
-          base: row.base,
-          premium: Math.round(row.premium),
-          raw: "Načteno podle polohy buněk: " + row.line
-        }));
-      const unique = [];
-      generated.forEach(row => { if (!unique.some(q => q.period === row.period)) unique.push(row); });
-      quarters.push(...unique);
+    // Build candidate quarter rows directly from cells. Prefer position-based
+    // values whenever they cover the full table: plain OCR text can merge columns.
+    const generated = rows
+      .filter(row => row.period && row.base > 0 && row.premium > 0)
+      .map(row => ({
+        period: normalizeQuarterLabel(row.period),
+        dueDate: row.dueDate || "",
+        sourcePeriod: row.sourcePeriod || "",
+        base: row.base,
+        premium: Math.round(row.premium),
+        raw: "Načteno podle polohy buněk: " + row.line
+      }));
+    const unique = [];
+    generated.forEach(row => { if (!unique.some(q => q.period === row.period)) unique.push(row); });
+    const positionCoversExisting = unique.length > 0 &&
+      quarters.every(q => unique.some(p => p.period === normalizeQuarterLabel(q.period)));
+    if (unique.length > 0 && (
+      quarters.length === 0 ||
+      unique.length > quarters.length ||
+      (unique.length === quarters.length && positionCoversExisting)
+    )) {
+      quarters.splice(0, quarters.length, ...unique);
     }
     const byPeriod = new Map();
     rows.forEach(row=>{ if(row.period) byPeriod.set(row.period,row); });
