@@ -44,3 +44,5 @@ Aby bylo možné načíst podporované formáty a provést OCR, aplikace stahuje
 ## Spuštění
 
 Aplikaci lze servírovat jako statické soubory. Pro lokální test stačí spustit jednoduchý HTTP server v adresáři aplikace a otevřít \`index.html\` přes \`localhost\`. Pokud ji budeš hostovat na GitHub Pages, pamatuj, že soukromé repo nezaručuje soukromý přístup na publikovanou webovou stránku.
+
+- Oprava záložního parsování: pokud řádky nelze vytáhnout z OCR textu, předpisy se sestaví z rozpoznaných pozic buněk v tabulce.
