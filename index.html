@@ -4,9 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#102e46">
-  <meta name="description" content="Lokální nástroj pro kontrolu podkladů a výpočet zákonného pojištění.">
+  <meta name="description" content="Lokální nástroj pro kontrolu plateb a výpočet zákonného pojištění.">
   <title>Výpočet zákonného pojištění</title>
   <link rel="stylesheet" href="./styles.css">
+  <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script defer src="./app.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -15,21 +21,19 @@
       <p class="eyebrow">LOKÁLNÍ PRACOVNÍ PROSTŘEDÍ</p>
       <h1>Výpočet zákonného pojištění</h1>
     </div>
-    <span class="privacy-pill"><span class="dot"></span> Data zůstávají v tomto prohlížeči</span>
+    <span class="privacy-pill"><span class="dot"></span> Soubory zůstávají v prohlížeči</span>
   </header>
 
   <main class="container">
     <section class="intro">
       <div>
         <p class="eyebrow">ZPRACOVÁNÍ PODKLADŮ</p>
-        <h2>Od podkladů k ověřenému Excelu</h2>
-        <p class="intro-copy">Vyber screenshot uskutečněných plateb a základní dokument. Nejdříve zobrazíme rozpoznané údaje ke kontrole, teprve potom navážeme výpočty a exportem.</p>
+        <h2>Od plateb k ověřenému Excelu</h2>
+        <p class="intro-copy">Nahraj screenshot skutečných plateb a základní dokument s čtvrtletními předpisy. Rozpoznané údaje zkontroluješ a opravíš ještě před výpočtem.</p>
       </div>
       <div class="step-indicator" aria-label="Postup">
         <div class="step active"><span>1</span><small>Podklady</small></div>
-        <div class="step-line"></div>
         <div class="step"><span>2</span><small>Kontrola</small></div>
-        <div class="step-line"></div>
         <div class="step"><span>3</span><small>Výstup</small></div>
       </div>
     </section>
@@ -37,88 +41,115 @@
     <section class="privacy-note" role="note">
       <div class="note-icon" aria-hidden="true">⌂</div>
       <div>
-        <strong>Navrženo pro lokální práci</strong>
-        <p>Vybrané soubory zpracovává tato stránka v prohlížeči. Tato počáteční verze je nikam nenahrává; neobsahuje serverové úložiště ani externí AI.</p>
+        <strong>Lokální zpracování dat</strong>
+        <p>Obsah vybraných souborů se zpracovává v prohlížeči a není odesílán na server. Pro načtení knihoven a OCR modelu se stahují pouze programové soubory; obsah plateb ani výsledky se jim neposílají.</p>
       </div>
-      <span class="note-status">LOKÁLNĚ</span>
+      <span class="note-status">BEZ UPLOADU</span>
     </section>
 
     <section class="upload-grid" aria-label="Vstupní podklady">
       <article class="upload-card">
-        <div class="card-head">
-          <span class="card-number">01</span>
-          <span class="file-type">OBRÁZEK</span>
-        </div>
+        <div class="card-head"><span class="card-number">01</span><span class="file-type">SCREENSHOT PLATEB</span></div>
         <div class="upload-icon image-icon" aria-hidden="true">▧</div>
-        <h3>Screenshot plateb</h3>
-        <p>Obrázek přehledu skutečně uhrazených částek a dat plateb.</p>
+        <h3>Skutečné platby</h3>
+        <p>Obrázek se seznamem plateb, částek a dat úhrady.</p>
         <label class="file-drop" for="paymentsFile" id="paymentsDrop">
-          <span class="drop-symbol">＋</span>
-          <strong>Vybrat screenshot</strong>
-          <span>PNG, JPG, WEBP</span>
+          <span class="drop-symbol">＋</span><strong>Vybrat screenshot</strong><span>PNG, JPG, WEBP</span>
         </label>
         <input id="paymentsFile" class="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
         <div class="file-meta" id="paymentsMeta" aria-live="polite">Zatím nebyl vybrán soubor</div>
       </article>
 
       <article class="upload-card">
-        <div class="card-head">
-          <span class="card-number">02</span>
-          <span class="file-type">ZÁKLADNÍ DOKUMENT</span>
-        </div>
+        <div class="card-head"><span class="card-number">02</span><span class="file-type">ZÁKLADNÍ DOKUMENT</span></div>
         <div class="upload-icon doc-icon" aria-hidden="true">▤</div>
-        <h3>Předpisy a základ</h3>
-        <p>Dokument s předpisy pojistného, obdobími a pravidly výpočtu.</p>
+        <h3>Předpisy a čtvrtletí</h3>
+        <p>Tabulka s obdobími, splatností, výpočtovými základy a pojistným.</p>
         <label class="file-drop" for="baseFile" id="baseDrop">
-          <span class="drop-symbol">＋</span>
-          <strong>Vybrat dokument</strong>
-          <span>PDF, XLSX, XLS, DOCX, DOC, TXT, CSV</span>
+          <span class="drop-symbol">＋</span><strong>Vybrat základní dokument</strong><span>PDF, XLSX, XLS, DOCX, TXT, CSV nebo obrázek</span>
         </label>
-        <input id="baseFile" class="file-input" type="file" accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.csv,application/pdf">
+        <input id="baseFile" class="file-input" type="file" accept=".pdf,.xlsx,.xls,.docx,.txt,.csv,.html,.htm,application/pdf,image/png,image/jpeg,image/webp">
         <div class="file-meta" id="baseMeta" aria-live="polite">Zatím nebyl vybrán soubor</div>
       </article>
     </section>
 
-    <section class="next-panel">
-      <div class="next-copy">
-        <h3>Další krok: cílový Excel</h3>
-        <p>Vyber také šablonu, do které se mají zapsat výsledky. Zatím se soubor jen lokálně načte; nic se nepřepíše bez potvrzení.</p>
+    <section class="controls-panel">
+      <div class="control-copy">
+        <h3>Datum výpočtu</h3>
+        <p>Pro neuhrazený zůstatek se navýšení počítá k tomuto datu. Můžeš ho změnit.</p>
       </div>
-      <label class="template-picker" for="targetFile"><span aria-hidden="true">＋</span> Vybrat cílový Excel</label>
-      <input id="targetFile" class="file-input" type="file" accept=".xlsx,.xls">
-      <div class="file-meta target-meta" id="targetMeta" aria-live="polite">Cílová šablona nebyla vybrána</div>
+      <label class="date-control" for="asOfDate">Počítat ke dni <input id="asOfDate" type="date"></label>
     </section>
 
-    <section class="selected-summary" id="selectedSummary" hidden>
-      <div>
-        <p class="eyebrow">VYBRANÉ SOUBORY</p>
-        <h3>Připraveno ke kontrole</h3>
-        <p class="summary-text">Soubory zůstávají v paměti této stránky. Pro další krok je potřeba doplnit čtení formátů a ověřit výstupní šablonu.</p>
-      </div>
-      <button class="primary-button" id="reviewButton" type="button">Zkontrolovat podklady <span aria-hidden="true">→</span></button>
-    </section>
+    <div class="action-row">
+      <button class="primary-button" id="readButton" type="button" disabled>Načíst a rozpoznat podklady <span aria-hidden="true">→</span></button>
+      <span class="privacy-small"><span class="dot"></span> Žádné nahrávání souborů</span>
+    </div>
+    <div class="status-panel" id="statusPanel" role="status" aria-live="polite" hidden>
+      <div class="spinner" id="spinner"></div>
+      <div><strong id="statusTitle">Zpracovávám podklady</strong><p id="statusText"></p></div>
+    </div>
 
     <section class="review-panel" id="reviewPanel" hidden>
       <div class="section-heading">
-        <div>
-          <p class="eyebrow">KONTROLA PŘED VÝPOČTEM</p>
-          <h2>Souhrn vybraných souborů</h2>
+        <div><p class="eyebrow">KROK 2</p><h2>Zkontroluj rozpoznaná data</h2><p class="section-copy">Tabulky můžeš před výpočtem upravit. Nejasné částky nebo data vždy oprav podle původního podkladu.</p></div>
+      </div>
+
+      <div class="table-section">
+        <div class="table-title"><div><span class="table-index">A</span><h3>Skutečné platby</h3></div><button class="mini-button" id="addPayment" type="button">＋ Přidat platbu</button></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Datum platby</th><th>Částka (Kč)</th><th>Rozpoznaný řádek</th><th></th></tr></thead><tbody id="paymentsBody"></tbody></table>
         </div>
-        <span class="review-badge">Bez výpočtu</span>
+        <p class="empty-hint" id="paymentsEmpty" hidden>Žádné platby se nepodařilo bezpečně rozpoznat. Přidej je ručně nebo zopakuj načtení kvalitnějšího screenshotu.</p>
       </div>
-      <div class="review-list" id="reviewList"></div>
-      <div class="warning-note">
-        <strong>Automatický výpočet zatím není aktivní.</strong>
-        <p>Abychom předešli nesprávným částkám, je potřeba nejprve implementovat čtečky PDF/Excel/Word a OCR a potvrdit pravidla z reálné šablony. Tato verze zatím pouze eviduje vybrané soubory v paměti stránky.</p>
+
+      <div class="table-section">
+        <div class="table-title"><div><span class="table-index">B</span><h3>Předpisy pojistného</h3></div><button class="mini-button" id="addQuarter" type="button">＋ Přidat čtvrtletí</button></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Čtvrtletí</th><th>Splatnost</th><th>Základ (Kč)</th><th>Řádné pojistné (Kč)</th><th></th></tr></thead><tbody id="quartersBody"></tbody></table>
+        </div>
+        <p class="empty-hint" id="quartersEmpty" hidden>Čtvrtletní předpisy se nepodařilo rozpoznat. Přidej řádky ručně; nevkládej domyšlené částky.</p>
+        <div class="rate-control"><label for="rateInput">Sazba (‰), jen pokud chybí předpis pojistného <input id="rateInput" type="number" min="0" max="1000" step="0.1" placeholder="Např. 8,4"></label><span id="rateSource">Sazba nebyla rozpoznána</span></div>
       </div>
-      <button type="button" class="secondary-button" id="backButton">Upravit výběr</button>
+
+      <details class="source-details">
+        <summary>Zobrazit text načtený ze základního dokumentu</summary>
+        <pre id="sourceText"></pre>
+      </details>
+
+      <div class="review-actions">
+        <button class="secondary-button" id="backToFiles" type="button">Změnit soubory</button>
+        <button class="primary-button" id="calculateButton" type="button">Vypočítat a zkontrolovat <span aria-hidden="true">→</span></button>
+      </div>
     </section>
 
-    <footer>
-      <span>Výpočet zákonného pojištění</span>
-      <span>Lokální prototyp · žádný serverový zápis</span>
-    </footer>
+    <section class="results-panel" id="resultsPanel" hidden>
+      <div class="section-heading result-heading">
+        <div><p class="eyebrow">KROK 3</p><h2>Výsledek výpočtu</h2><p class="section-copy">Platby se započítávají nejstaršímu neuhrazenému řádnému pojistnému. Navýšení za prodlení je vedeno odděleně.</p></div>
+        <span class="result-badge">Výpočet připraven</span>
+      </div>
+      <div class="kpi-grid" id="summaryGrid"></div>
+      <div class="table-section">
+        <div class="table-title"><div><span class="table-index">C</span><h3>Souhrn po čtvrtletích</h3></div></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Čtvrtletí</th><th>Splatnost</th><th>Předpis (Kč)</th><th>Uhrazené pojistné (Kč)</th><th>Nedoplatek (Kč)</th><th>Navýšení celkem (Kč)</th><th>Navýšení uhrazeno (Kč)</th><th>Navýšení zbývá (Kč)</th></tr></thead><tbody id="resultQuartersBody"></tbody></table>
+        </div>
+      </div>
+      <div class="table-section">
+        <div class="table-title"><div><span class="table-index">D</span><h3>Rozpis započtení plateb</h3></div></div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Datum</th><th>Čtvrtletí</th><th>Typ započtení</th><th>Částka (Kč)</th><th>Prodlení (měsíce)</th><th>Navýšení (Kč)</th></tr></thead><tbody id="allocationsBody"></tbody></table>
+        </div>
+      </div>
+      <div class="warning-note" id="resultWarnings" hidden><strong>Kontrola nutná</strong><ul id="warningList"></ul></div>
+      <div class="review-actions">
+        <button class="secondary-button" id="editDataButton" type="button">Upravit data</button>
+        <button class="primary-button" id="downloadButton" type="button">Stáhnout vyplněný Excel <span aria-hidden="true">↓</span></button>
+      </div>
+      <p class="export-note">Výstupní sešit obsahuje souhrn, rozpis přiřazení plateb a původní rozpoznané vstupy. Soubory ani výsledky se do GitHubu neukládají.</p>
+    </section>
+
+    <footer><span>Výpočet zákonného pojištění</span><span>Lokální prototyp · bez serverového ukládání</span></footer>
   </main>
-  <script src="./app.js"></script>
 </body>
 </html>
