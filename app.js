@@ -373,7 +373,7 @@
         const bitmap = await createImageBitmap(blob);
         // The original financial table has small text. Upscale it to roughly 2,700 px wide
     // rather than 1,500 px so OCR retains distinctions between nearby digits.
-    const factor = Math.min(3.2, Math.max(2, 2900 / Math.max(bitmap.width, bitmap.height)));
+    const factor = Math.min(3.2, Math.max(1, 2900 / Math.max(bitmap.width, bitmap.height)));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(bitmap.width * factor);
         canvas.height = Math.round(bitmap.height * factor);
@@ -406,7 +406,7 @@
 
 
   async function makeOcrVariants(blob) {
-    if (!window.createImageBitmap) return [blob, blob, blob, blob];
+    if (!window.createImageBitmap) return [blob, blob, blob, blob, blob];
     let bitmap;
     try { bitmap = await createImageBitmap(blob); }
     catch (_) { return [blob, blob, blob, blob]; }
@@ -935,6 +935,15 @@
       cropCtx.fillStyle="#fff"; cropCtx.fillRect(0,0,cropCanvas.width,cropCanvas.height);
       cropCtx.imageSmoothingEnabled=true; cropCtx.imageSmoothingQuality="high";
       cropCtx.drawImage(bitmap,sx,sy,sw,sh,0,0,cropCanvas.width,cropCanvas.height);
+      // Convert tiny screenshot cells to high-contrast grayscale, still locally.
+      const cellImage=cropCtx.getImageData(0,0,cropCanvas.width,cropCanvas.height);
+      const cellPixels=cellImage.data;
+      for(let p=0;p<cellPixels.length;p+=4){
+        const gray=0.299*cellPixels[p]+0.587*cellPixels[p+1]+0.114*cellPixels[p+2];
+        const contrast=Math.max(0,Math.min(255,(gray-128)*1.4+128));
+        cellPixels[p]=cellPixels[p+1]=cellPixels[p+2]=contrast;
+      }
+      cropCtx.putImageData(cellImage,0,0);
       const whitelist=mode==="date" ? "0123456789./-" :
         mode==="number" ? "0123456789., KčKc|/" : "";
       const attempts=mode==="text" ? ["7"] : ["7","6"];
