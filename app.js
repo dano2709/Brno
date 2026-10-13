@@ -789,6 +789,7 @@
       const stable = winner.votes >= Math.max(2, Math.ceil(slot.seenRounds * 0.35));
       consensusRows.push({
         date:slot.date,
+        ordinal:slot.ordinal,
         requestedAmount:winner.requestedAmount,
         amount:winner.amount,
         raw:winner.raw || slot.raw,
@@ -799,7 +800,7 @@
       });
       confidence.push(stable);
     }
-    consensusRows.sort((a,b)=>a.date.localeCompare(b.date) || a.requestedAmount-b.requestedAmount);
+    consensusRows.sort((a,b)=>a.date.localeCompare(b.date) || a.ordinal-b.ordinal);
     return {
       rows:consensusRows,
       usableRounds,
