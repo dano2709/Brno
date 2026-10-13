@@ -554,6 +554,140 @@
     };
   }
 
+  function normalizeOcrWord(value) {
+    return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("cs-CZ").replace(/[^a-z0-9/.-]/g, "");
+  }
+
+  function positionRowsFromData(data) {
+    const rawWords = data && Array.isArray(data.words) ? data.words : [];
+    const words = rawWords.map(word => {
+      const bbox = word.bbox || {};
+      const text = String(word.text || "").trim();
+      if (!text || !Number.isFinite(Number(bbox.x0)) || !Number.isFinite(Number(bbox.x1)) ||
+          !Number.isFinite(Number(bbox.y0)) || !Number.isFinite(Number(bbox.y1))) return null;
+      return {
+        text, norm: normalizeOcrWord(text),
+        x0:Number(bbox.x0), x1:Number(bbox.x1), y0:Number(bbox.y0), y1:Number(bbox.y1),
+        cx:(Number(bbox.x0)+Number(bbox.x1))/2,
+        cy:(Number(bbox.y0)+Number(bbox.y1))/2
+      };
+    }).filter(Boolean);
+    if (words.length < 10) return { rows: [], reason: "OCR neposkytlo dostatek poloh slov pro rozdělení sloupců." };
+    const width = Math.max(...words.map(w=>w.x1), 1);
+    const height = Math.max(...words.map(w=>w.y1), 1);
+    const topWords = words.filter(w=>w.cy < height * 0.46);
+    const baseAnchor = topWords.find(w=>/^(zaklad|vyměř|vymerovac)/.test(w.norm));
+    if (!baseAnchor) return { rows: [], reason: "V záhlaví nebyl rozpoznán sloupec „základ pro výpočet“." };
+
+    const baseHeader = topWords.filter(w =>
+      Math.abs(w.cy-baseAnchor.cy) < height*0.11 &&
+      (w === baseAnchor || /^(pro|vypocet|zaklad|vyměř|vymerovac)/.test(w.norm)) &&
+      Math.abs(w.cx-baseAnchor.cx) < width*0.15
+    );
+    const baseX = baseHeader.length ? baseHeader.reduce((sum,w)=>sum+w.cx,0)/baseHeader.length : baseAnchor.cx;
+
+    let premiumAnchor = topWords.find(w=>/^(radne|řádné)/.test(w.norm));
+    if (!premiumAnchor) {
+      premiumAnchor = topWords.filter(w=>/^pojistne/.test(w.norm) && w.cx > baseX)
+        .sort((a,b)=>a.cx-b.cx)[0];
+    }
+    if (!premiumAnchor) return { rows: [], reason: "V záhlaví nebyl rozpoznán sloupec „řádné pojistné“." };
+    const premiumHeader = topWords.filter(w =>
+      Math.abs(w.cy-premiumAnchor.cy) < height*0.11 &&
+      (w === premiumAnchor || /^pojistne/.test(w.norm)) &&
+      w.cx > baseX && w.cx < width
+    );
+    const premiumX = premiumHeader.length ? premiumHeader.reduce((sum,w)=>sum+w.cx,0)/premiumHeader.length : premiumAnchor.cx;
+    if (!(premiumX > baseX)) return { rows: [], reason: "Nepodařilo se určit pořadí sloupců základ a pojistné." };
+
+    const prevCandidates = topWords.filter(w =>
+      w.cx < baseX && /^(zpusob|zamestnavani|obdobi|ctvrtleti|na)$/.test(w.norm)
+    );
+    const previousX = prevCandidates.length ? Math.max(...prevCandidates.map(w=>w.cx)) : null;
+    const baseLeft = previousX == null ? 0 : (previousX+baseX)/2;
+    const boundary = (baseX+premiumX)/2;
+    const tolerance = Math.max(4,height*0.008);
+    const sorted = words.slice().sort((a,b)=>a.cy-b.cy || a.cx-b.cx);
+    const grouped = [];
+    sorted.forEach(word=>{
+      let row = grouped[grouped.length-1];
+      if (!row || Math.abs(word.cy-row.meanY) > tolerance) {
+        row = { words:[], meanY:word.cy };
+        grouped.push(row);
+      }
+      row.words.push(word);
+      row.meanY = row.words.reduce((sum,w)=>sum+w.cy,0)/row.words.length;
+    });
+
+    function numberInCell(cellWords) {
+      const parts = cellWords
+        .map(w=>String(w.text).trim())
+        .filter(t=>/\d/.test(t))
+        .map(t=>t.replace(/[^\d,.-]/g,""))
+        .filter(t=>t && /^\d[\d,.-]*$/.test(t));
+      if (!parts.length) return null;
+      // Thousands can be OCR'd as separate words (e.g. 258 + 475).
+      // Known cell boundaries keep base and premium digits separate.
+      const val = parseAmount(parts.join(""));
+      return val == null ? null : val;
+    }
+
+    const resultRows = grouped.map(row=>{
+      const rowWords = row.words;
+      const line = rowWords.map(w=>w.text).join(" ");
+      const q = quarterMatch(line);
+      const dates = dateMatches(line);
+      const baseWords = rowWords.filter(w=>w.cx >= baseLeft && w.cx < boundary);
+      const premiumWords = rowWords.filter(w=>w.cx >= boundary);
+      const base = numberInCell(baseWords);
+      const premium = numberInCell(premiumWords);
+      return { period:q ? q.period : "", dueDate:dates.length ? toISO(dates[0].text) : "", base, premium, y:row.meanY, line };
+    }).filter(row=>row.base > 0 && row.premium > 0 && row.base <= 10000000 && row.premium < 100000);
+    return {
+      rows:resultRows,
+      columns:{baseX,premiumX,baseLeft,boundary,width,height},
+      reason:resultRows.length ? "" : "V určených sloupcích nebyly nalezeny oddělené číselné hodnoty."
+    };
+  }
+
+  function correctQuarterValuesFromPositions(quarters, positionedPages) {
+    const pages = (positionedPages || []).map(page=>positionRowsFromData(page.data || page)).filter(p=>p.rows.length);
+    const rows = pages.flatMap(p=>p.rows).sort((a,b)=>a.y-b.y);
+    const byPeriod = new Map();
+    rows.forEach(row=>{ if(row.period) byPeriod.set(row.period,row); });
+    const hasPeriodRows = quarters.length > 0 && quarters.every(q=>byPeriod.has(normalizeQuarterLabel(q.period)));
+    let matched = 0;
+    if (hasPeriodRows) {
+      quarters.forEach(q=>{
+        const row=byPeriod.get(normalizeQuarterLabel(q.period));
+        if (!row) return;
+        q.base=row.base; q.premium=Math.round(row.premium);
+        q.raw=(q.raw ? q.raw+" | " : "")+"Sloupce podle polohy: základ "+row.base+", pojistné "+row.premium;
+        matched++;
+      });
+    } else {
+      const validRows = rows.filter(r=>r.base>0 && r.premium>0);
+      if (quarters.length && validRows.length===quarters.length) {
+        const byDue=quarters.slice().sort((a,b)=>String(a.dueDate||"").localeCompare(String(b.dueDate||"")));
+        validRows.forEach((row,i)=>{
+          byDue[i].base=row.base; byDue[i].premium=Math.round(row.premium);
+          byDue[i].raw=(byDue[i].raw ? byDue[i].raw+" | " : "")+"Sloupce podle polohy: základ "+row.base+", pojistné "+row.premium;
+        });
+        matched=byDue.length;
+      }
+    }
+    const ok=quarters.length>0 && matched===quarters.length && pages.length>0;
+    return {
+      ok, matchedCount:matched, expectedCount:quarters.length,
+      mode:"Poloha buněk",
+      detail:ok
+        ? "Základ a řádné pojistné byly načteny samostatně podle polohy v tabulce ("+matched+"/"+quarters.length+" čtvrtletí)."
+        : "Poloha sloupců potvrdila "+matched+" z "+quarters.length+" čtvrtletí. Zkontroluj, zda základ a pojistné zůstaly oddělené.",
+      pageCount:pages.length
+    };
+  }
+
+
   async function parsePdf(file) {
     if (!window.pdfjsLib) throw new Error("Knihovna PDF není dostupná. Zkontroluj připojení k internetu.");
     pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
