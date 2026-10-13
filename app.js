@@ -111,8 +111,13 @@
   }
 
   function parseAmount(value) {
+    if (value instanceof Date) return null;
     if (typeof value === "number" && Number.isFinite(value)) return value;
-    let s = String(value == null ? "" : value).trim().replace(/[Kk][čc]\.?/g, "").replace(/CZK/gi, "").replace(/\s+/g, "");
+    const original = String(value == null ? "" : value).trim();
+    // Prevent dates and quarter labels from being mistaken for amounts.
+    if (/^(?:Q\s*[1-4]\s*[\/.-]\s*\d{2,4}|[1-4]\s*Q\s*[\/.-]\s*\d{2,4})$/i.test(original)) return null;
+    if (/^\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}$/.test(original) || /^\d{4}-\d{2}-\d{2}$/.test(original)) return null;
+    let s = original.replace(/[Kk][čc]\.?/g, "").replace(/CZK/gi, "").replace(/\s+/g, "");
     if (!s) return null;
     s = s.replace(/[^\d,.\-]/g, "");
     if (!s || !/\d/.test(s)) return null;
@@ -130,7 +135,6 @@
     const n = Number(s);
     return Number.isFinite(n) ? n : null;
   }
-
   function quarterMatch(value) {
     const s = String(value == null ? "" : value).trim();
     const m = s.match(/(?:^|\b)Q\s*([1-4])\s*[\/.-]\s*(\d{2,4})\b/i) || s.match(/(?:^|\b)([1-4])\s*Q\s*[\/.-]\s*(\d{2,4})\b/i);
