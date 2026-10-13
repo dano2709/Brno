@@ -637,7 +637,16 @@
       const line = rowWords.map(w=>w.text).join(" ");
       const q = quarterMatch(line);
       const dates = dateMatches(line);
-      const baseWords = rowWords.filter(w=>w.cx >= baseLeft && w.cx < boundary);
+      let rowBaseLeft = baseLeft;
+      if (previousX == null) {
+        const leftSemanticWords = rowWords.filter(w =>
+          w.cx < boundary && (quarterMatch(w.text) || dateMatches(w.text).length > 0)
+        );
+        if (leftSemanticWords.length) {
+          rowBaseLeft = Math.max(rowBaseLeft, Math.max(...leftSemanticWords.map(w=>w.cx)) + 1);
+        }
+      }
+      const baseWords = rowWords.filter(w=>w.cx >= rowBaseLeft && w.cx < boundary);
       const premiumWords = rowWords.filter(w=>w.cx >= boundary);
       const base = numberInCell(baseWords);
       const premium = numberInCell(premiumWords);
