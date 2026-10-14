@@ -1964,7 +1964,7 @@
     const quarterStart = 106, quarterCapacity = 40, quarterEnd = quarterStart + quarterCapacity - 1;
 
     const inputs = workbook.addWorksheet("Vstupní data", { views: [{ state: "frozen", ySplit: 2 }] });
-    inputs.addRow(["VSTUPNÍ DATA – upravuj modře označené komůrky; výpočtové listy obsahují vzorce"]); styleHeader(inputs.getRow(1));
+    inputs.addRow(["VSTUPNÍ DATA – upravuj modře označené buňky; výpočtové listy obsahují vzorce"]); styleHeader(inputs.getRow(1));
     inputs.addRow(["Datum platby","Částka platby (Kč)","Vyřízeno (Kč)","Započteno jako platba?","Rozpoznaný řádek","","Datum výpočtu"]);
     styleHeader(inputs.getRow(2));
     const sortedInputPayments = r.paymentRows.slice().sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")));
