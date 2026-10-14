@@ -48,3 +48,8 @@ Aby bylo možné načíst podporované formáty a provést OCR, aplikace stahuje
 Aplikaci lze servírovat jako statické soubory. Pro lokální test stačí spustit jednoduchý HTTP server v adresáři aplikace a otevřít \`index.html\` přes \`localhost\`. Pokud ji budeš hostovat na GitHub Pages, pamatuj, že soukromé repo nezaručuje soukromý přístup na publikovanou webovou stránku.
 
 - Oprava záložního parsování: pokud řádky nelze vytáhnout z OCR textu, předpisy se sestaví z rozpoznaných pozic buněk v tabulce.
+
+
+## Vzorce v exportovaném Excelu
+
+Exportovaný sešit obsahuje propojené vzorce v listech **Souhrn**, **Přehled čtvrtletí** a **Započtení plateb**. List **Vstupní data** má rezervu pro 100 plateb a 40 čtvrtletních předpisů. Platby zadávej chronologicky do modře označených buněk; datum výpočtu je v buňce G2. Při otevření sešit v Excelu přepočítá vzorce. Výpočtové soubory se nadále generují lokálně v prohlížeči.
