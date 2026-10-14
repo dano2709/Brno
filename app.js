@@ -18,7 +18,8 @@
     basePageOcrChecks: [],
     basePositionPages: [],
     basePositionCheck: null,
-    verificationTests: []
+    verificationTests: [],
+    asOfDateManuallySet: false
   };
 
   const $ = (id) => document.getElementById(id);
@@ -34,6 +35,7 @@
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   };
   $("asOfDate").value = isoToday();
+  $("asOfDate").addEventListener("change", () => { state.asOfDateManuallySet = true; });
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + " B";
@@ -173,6 +175,15 @@
     const paid = parseDate(paidValue);
     if (!due || !paid || paid <= due) return 0;
     return Math.max(0, (paid.getFullYear() - due.getFullYear()) * 12 + paid.getMonth() - due.getMonth());
+  }
+
+  // Mirrors the source workbook: I = H/10, J = ROUND(amount * I, 0).
+  // When the payment cell is empty, the amount is the unpaid balance remaining
+  // after earlier allocations to that quarter.
+  function templateLateIncrease(amount, delayMonths) {
+    const principal = Math.max(0, Number(amount) || 0);
+    const months = Math.max(0, Math.floor(Number(delayMonths) || 0));
+    return Math.round(principal * (months / 10));
   }
 
   function normalizeQuarterLabel(value) {
@@ -1218,6 +1229,18 @@
       state.payments = paymentScan.consensusRows && paymentScan.consensusRows.length
         ? paymentScan.consensusRows
         : parsePaymentText(state.paymentOcrText);
+
+      // Default the calculation date to the latest date shown in the imported
+      // statement (including a row with 0 Kč processed). This matches the
+      // reference workbook's snapshot date; users can still override it manually.
+      if (!state.asOfDateManuallySet) {
+        const statementRows = parsePaymentText(state.paymentOcrText, false);
+        const statementDates = [...state.payments, ...statementRows]
+          .map(payment => payment.date)
+          .filter(validISODate)
+          .sort((a,b) => a.localeCompare(b));
+        if (statementDates.length) $("asOfDate").value = statementDates[statementDates.length - 1];
+      }
       $("paymentOcrText").textContent = state.paymentOcrText || "Ze screenshotu nebyl rozpoznán text.";
 
       setStatus("Čtu základní dokument", "Načítám data v prohlížeči a ověřuji jejich soulad.", true);
@@ -1658,7 +1681,7 @@
         if (q.remaining <= 0) continue;
         const allocated = Math.min(q.remaining, remainingPayment);
         const delay = monthsLate(q.dueDate, payment.date);
-        const fee = Math.round(allocated * delay / 10);
+        const fee = templateLateIncrease(allocated, delay);
         q.remaining = Math.max(0, q.remaining - allocated);
         q.paidPrincipal += allocated;
         q.assessedFeeOnPaid += fee;
@@ -1692,7 +1715,7 @@
     quarters.forEach(q => {
       if (q.remaining > 0) {
         const delay = monthsLate(q.dueDate, asOf);
-        const fee = Math.round(q.remaining * delay / 10);
+        const fee = templateLateIncrease(q.remaining, delay);
         q.feeOnOutstanding = fee;
         q.assessedFeeOnPaid += 0;
         q.feeUnpaid += fee;
@@ -1977,7 +2000,7 @@
     warnings.columns = [{width:22},{width:100}];
     warnings.addRow(["KONTROLA VÝPOČTU","VÝSLEDEK"]); styleHeader(warnings.getRow(1));
     warnings.addRow(["Datum výpočtu",dateFmt(r.asOf)]);
-    warnings.addRow(["Sazba za prodlení","10 % z příslušné částky za každý kalendářní měsíc prodlení; podle vzorců ve vzorovém sešitu."]);
+    warnings.addRow(["Vzorec navýšení","I = H/10; J = ROUND(částka × I; 0). U částečné úhrady se počítá každá alokovaná část zvlášť; u otevřeného zůstatku se použije zbývající jistina."]);
     warnings.addRow(["Pravidlo přiřazení","Platby se započítávají nejprve na nejstarší neuhrazené řádné pojistné. Navýšení se hradí až po úhradě řádného pojistného."]);
     warnings.addRow(["Zdrojové soubory","Obsah vstupů se zpracoval v prohlížeči; do repozitáře ani na aplikační server nebyl poslán."]);
     if (r.warnings.length) {
