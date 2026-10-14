@@ -1871,20 +1871,20 @@
     const sumHeader = summary.addRow(["Ukazatel","Částka (Kč)","Poznámka"]);
     styleHeader(sumHeader);
     [
-      ["Předepsané řádné pojistné", r.totals.premium, "Součet čtvrtletních předpisů"],
-      ["Celkem skutečně zaplaceno", r.totals.paymentTotal, "Součet částek ze screenshotu"],
-      ["Započteno na řádné pojistné", r.totals.principalPaid, "Přiřazení nejstaršímu nedoplatku"],
-      ["Zbývající řádné pojistné", r.totals.principalOpen, "Jistina po započtení plateb"],
-      ["Navýšení za prodlení celkem", r.totals.feeAssessed, "Navýšení z uhrazených částek a otevřené jistiny"],
-      ["Uhrazené navýšení", r.totals.feePaid, "Platby použité až po úhradě řádného pojistného"],
-      ["Zbývající navýšení", r.totals.feeOpen, "Neuhrazené navýšení za prodlení"],
-      ["Celkem zbývá uhradit", r.totals.due, "Zbývající pojistné a neuhrazené navýšení"],
-      ["Nezařazený přeplatek", r.totals.overpayment, "Platby nad rámec všech předpisů a evidovaného navýšení"]
+      ["Předepsané řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!E2:E41)" }, "Součet čtvrtletních předpisů – vzorec"],
+      ["Celkem skutečně zaplaceno", { formula: "SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\")" }, "Součet částek ze vstupních dat – vzorec"],
+      ["Započteno na řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!F2:F41)" }, "Přiřazení nejstaršímu nedoplatku – vzorec"],
+      ["Zbývající řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!G2:G41)" }, "Jistina po započtení plateb – vzorec"],
+      ["Navýšení za prodlení celkem", { formula: "SUM('Přehled čtvrtletí'!H2:H41)" }, "Navýšení z uhrazených částek a otevřené jistiny – vzorec"],
+      ["Uhrazené navýšení", { formula: "SUM('Přehled čtvrtletí'!I2:I41)" }, "Platby použité až po úhradě řádného pojistného – vzorec"],
+      ["Zbývající navýšení", { formula: "SUM('Přehled čtvrtletí'!J2:J41)" }, "Neuhrazené navýšení za prodlení – vzorec"],
+      ["Celkem zbývá uhradit", { formula: "SUM('Přehled čtvrtletí'!G2:G41)+SUM('Přehled čtvrtletí'!J2:J41)" }, "Zbývající pojistné a neuhrazené navýšení – vzorec"],
+      ["Nezařazený přeplatek", { formula: "MAX(0,SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\")-SUM('Přehled čtvrtletí'!E2:E41)-SUM('Přehled čtvrtletí'!I2:I41))" }, "Platby nad rámec jistiny a navýšení – vzorec"]
     ].forEach(row => summary.addRow(row));
     styleBodyRows(summary, 5);
     summary.getColumn(2).numFmt = "#,##0;[Red]-#,##0";
     summary.addRow([]);
-    const notice = summary.addRow(["Poznámka", "Navýšení za prodlení je počítáno podle vzorce ze vzorového sešitu: 10 % za každý kalendářní měsíc mezi měsícem splatnosti a měsícem platby (pouze pokud je platba po splatnosti), s zaokrouhlením na celé Kč."]);
+    const notice = summary.addRow(["Poznámka", "Souhrn, přehled čtvrtletí a započtení plateb obsahují vzorce. Uprav vstupy na listu Vstupní data; platby zadávej chronologicky. Listy se přepočítají při otevření v Excelu."]);
     notice.getCell(1).font = { bold: true, color: { argb: "FF77521B" } };
     notice.getCell(2).alignment = { wrapText: true, vertical: "top" };
     summary.mergeCells("B" + notice.number + ":F" + notice.number);
@@ -1960,41 +1960,98 @@
     [5,7,10,11].forEach(ci => { legacyTotal.getCell(ci).numFmt = "#,##0;[Red]-#,##0"; });
     legacy.autoFilter = { from: "A3", to: "K" + (legacy.rowCount - 1) };
 
+    const paymentStart = 3, paymentCapacity = 100, paymentEnd = paymentStart + paymentCapacity - 1;
+    const quarterStart = 106, quarterCapacity = 40, quarterEnd = quarterStart + quarterCapacity - 1;
+
+    const inputs = workbook.addWorksheet("Vstupní data", { views: [{ state: "frozen", ySplit: 2 }] });
+    inputs.addRow(["VSTUPNÍ DATA – upravuj modře označené komůrky; výpočtové listy obsahují vzorce"]); styleHeader(inputs.getRow(1));
+    inputs.addRow(["Datum platby","Částka platby (Kč)","Vyřízeno (Kč)","Započteno jako platba?","Rozpoznaný řádek","","Datum výpočtu"]);
+    styleHeader(inputs.getRow(2));
+    const sortedInputPayments = r.paymentRows.slice().sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")));
+    for (let i=0;i<paymentCapacity;i++) {
+      const p = sortedInputPayments[i];
+      const row = inputs.addRow(p ? [parseDate(p.date) || null, Number(p.requestedAmount == null ? p.amount : p.requestedAmount) || 0, Number(p.amount) || 0, Number(p.amount) > 0 ? "Ano" : "Ne — 0 Kč vyřízeno", p.raw || "Ruční záznam"] : [null,null,null,"",""]);
+      row.getCell(1).numFmt = "dd.mm.yyyy";
+      [1,2,3].forEach(ci => row.getCell(ci).font = { color: { argb: "FF0070C0" } });
+    }
+    inputs.getCell("G2").value = parseDate(r.asOf) || null;
+    inputs.getCell("G2").numFmt = "dd.mm.yyyy";
+    inputs.getCell("G2").font = { color: { argb: "FF0070C0" } };
+    inputs.getCell("G1").font = { bold: true, color: { argb: "FFFFFFFF" } };
+    inputs.addRow([]);
+    inputs.addRow(["PŘEDPISY POJISTNÉHO"]); styleHeader(inputs.getRow(quarterStart-2));
+    inputs.addRow(["Čtvrtletí","Splatnost","Období pro výpočet","Základ (Kč)","Řádné pojistné (Kč)","Původní řádek"]);
+    styleHeader(inputs.getRow(quarterStart-1));
+    for (let i=0;i<quarterCapacity;i++) {
+      const q = r.quarters[i];
+      const row = inputs.addRow(q ? [q.period, parseDate(q.dueDate) || null, q.sourcePeriod || "", Number(q.base) || 0, Number(q.premium) || 0, q.raw || "Ruční záznam"] : [null,null,"",null,null,""]);
+      row.getCell(2).numFmt = "dd.mm.yyyy";
+      [1,2,3,4,5].forEach(ci => row.getCell(ci).font = { color: { argb: "FF0070C0" } });
+    }
+    inputs.columns = [{width:18},{width:21},{width:22},{width:26},{width:24},{width:48},{width:4},{width:20}];
+    inputs.getCell("G3").value = "Platby zadávej chronologicky. Pro nové řádky použij volná místa.";
+    inputs.mergeCells("G3:H3");
+    inputs.getCell("G3").alignment = { wrapText: true };
+    inputs.getCell("G4").value = "Datum výpočtu je v G2.";
+    inputs.mergeCells("G4:H4");
+    inputs.autoFilter = { from: "A2", to: "E" + paymentEnd };
+
     const calc = workbook.addWorksheet("Přehled čtvrtletí", { views: [{ state: "frozen", ySplit: 1 }] });
     calc.columns = [
       {width:14},{width:14},{width:19},{width:21},{width:20},
       {width:22},{width:23},{width:20},{width:22},{width:20}
     ];
     const qhead = calc.addRow(["Čtvrtletí","Splatnost","Období pro výpočet","Výpočtový základ (Kč)","Řádné pojistné (Kč)","Uhrazeno na pojistné (Kč)","Nedoplatek pojistného (Kč)","Navýšení celkem (Kč)","Navýšení uhrazeno (Kč)","Navýšení zbývá (Kč)"]); styleHeader(qhead);
-    r.quarters.forEach(q => calc.addRow([
-      q.period, dateFmt(q.dueDate), q.sourcePeriod || "", q.base || 0, q.premium, q.paidPrincipal, q.remaining,
-      q.totalAssessedFee, q.paidFee, q.feeUnpaid
-    ]));
+    for (let i=0;i<quarterCapacity;i++) {
+      const rowNo = i+2, inputRow = quarterStart+i;
+      const prevPremium = i===0 ? "0" : `SUM($E$2:E${rowNo-1})`;
+      const priorPaidFee = i===0 ? "0" : `SUM($I$2:I${rowNo-1})`;
+      const row = calc.addRow([
+        {formula:`IF('Vstupní data'!A${inputRow}="","",'Vstupní data'!A${inputRow})`},
+        {formula:`IF(A${rowNo}="","",'Vstupní data'!B${inputRow})`},
+        {formula:`IF(A${rowNo}="","",'Vstupní data'!C${inputRow})`},
+        {formula:`IF(A${rowNo}="","",'Vstupní data'!D${inputRow})`},
+        {formula:`IF(A${rowNo}="","",IF(OR(D${rowNo}="", 'List1'!$I$1=""),'Vstupní data'!E${inputRow},ROUND(D${rowNo}*'List1'!$I$1/1000,0)))`},
+        {formula:`IF(A${rowNo}="","",MIN(E${rowNo},MAX(0,SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentEnd},'Vstupní data'!$A$${paymentStart}:$A$${paymentEnd},"<>")-${prevPremium})))`},
+        {formula:`IF(A${rowNo}="","",MAX(0,E${rowNo}-F${rowNo}))`},
+        {formula:`IF(A${rowNo}="","",SUMIF('Započtení plateb'!$B$2:$B$${1+paymentCapacity*quarterCapacity},A${rowNo},'Započtení plateb'!$E$2:$E$${1+paymentCapacity*quarterCapacity})+IF(G${rowNo}>0,ROUND(G${rowNo}*IF('Vstupní data'!$G$2<=B${rowNo},0,MAX(0,(YEAR('Vstupní data'!$G$2)-YEAR(B${rowNo}))*12+MONTH('Vstupní data'!$G$2)-MONTH(B${rowNo}))/10),0),0))`},
+        {formula:`IF(A${rowNo}="","",MIN(SUMIF('Započtení plateb'!$B$2:$B$${1+paymentCapacity*quarterCapacity},A${rowNo},'Započtení plateb'!$E$2:$E$${1+paymentCapacity*quarterCapacity}),MAX(0,SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentEnd},'Vstupní data'!$A$${paymentStart}:$A$${paymentEnd},"<>")-SUM($E$2:$E$${1+quarterCapacity})-${priorPaidFee})))`},
+        {formula:`IF(A${rowNo}="","",MAX(0,H${rowNo}-I${rowNo}))`}
+      ]);
+      row.getCell(2).numFmt = "dd.mm.yyyy";
+      [4,5,6,7,8,9,10].forEach(ci=>row.getCell(ci).numFmt="#,##0;[Red]-#,##0");
+    }
     styleBodyRows(calc, 2);
     calc.autoFilter = { from: "A1", to: "J" + calc.rowCount };
 
     const alloc = workbook.addWorksheet("Započtení plateb", { views: [{ state: "frozen", ySplit: 1 }] });
-    const allocHeads = ["Datum", "Čtvrtletí", "Typ započtení", "Částka (Kč)", "Prodlení (měsíce)", "Navýšení (Kč)", "Původní částka platby (Kč)"];
-    alloc.addRow(allocHeads); styleHeader(alloc.getRow(1));
-    alloc.columns = [{width:14},{width:14},{width:44},{width:18},{width:20},{width:18},{width:26}];
-    r.detail.forEach(d => alloc.addRow([dateFmt(d.date), d.period, d.type, Math.round(d.amount), d.delayMonths == null ? "" : d.delayMonths, Math.round(d.fee), d.sourceAmount == null ? "" : Math.round(d.sourceAmount)]));
+    alloc.columns = [{width:14},{width:14},{width:20},{width:20},{width:18},{width:44}];
+    const allocHead = alloc.addRow(["Datum platby","Čtvrtletí","Přiřazené pojistné (Kč)","Prodlení (měsíce)","Navýšení (Kč)","Poznámka"]); styleHeader(allocHead);
+    let allocRowNo = 2;
+    for (let pi=0;pi<paymentCapacity;pi++) {
+      const paymentInputRow = paymentStart+pi;
+      for (let qi=0;qi<quarterCapacity;qi++) {
+        const quarterInputRow = quarterStart+qi;
+        const quarterCalcRow = 2+qi;
+        const priorPaid = pi===0 ? "0" : `SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentInputRow-1},'Vstupní data'!$A$${paymentStart}:$A$${paymentInputRow-1},"<>")`;
+        const paidThrough = `SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentInputRow},'Vstupní data'!$A$${paymentStart}:$A$${paymentInputRow},"<>")`;
+        const priorPremium = qi===0 ? "0" : `SUM('Přehled čtvrtletí'!$E$2:$E$${quarterCalcRow-1})`;
+        const premiumThrough = `SUM('Přehled čtvrtletí'!$E$2:$E$${quarterCalcRow})`;
+        const row = alloc.addRow([
+          {formula:`IF('Vstupní data'!A${paymentInputRow}="","",'Vstupní data'!A${paymentInputRow})`},
+          {formula:`IF('Vstupní data'!A${quarterInputRow}="","",'Vstupní data'!A${quarterInputRow})`},
+          {formula:`IF(OR('Vstupní data'!$A$${paymentInputRow}="", 'Vstupní data'!$A$${quarterInputRow}="", 'Vstupní data'!$C$${paymentInputRow}<=0),0,MAX(0,MIN(${paidThrough},${premiumThrough})-MAX(${priorPaid},${priorPremium})))`},
+          {formula:`IF(OR(A${allocRowNo}="",C${allocRowNo}<=0),0,IF(A${allocRowNo}<='Vstupní data'!$B$${quarterInputRow},0,MAX(0,(YEAR(A${allocRowNo})-YEAR('Vstupní data'!$B$${quarterInputRow}))*12+MONTH(A${allocRowNo})-MONTH('Vstupní data'!$B$${quarterInputRow}))))`},
+          {formula:`ROUND(C${allocRowNo}*D${allocRowNo}/10,0)`},
+          {formula:`IF(C${allocRowNo}=0,"","Automatické rozdělení: nejstarší jistina první")`}
+        ]);
+        row.getCell(1).numFmt = "dd.mm.yyyy";
+        [3,5].forEach(ci=>row.getCell(ci).numFmt="#,##0;[Red]-#,##0");
+        allocRowNo++;
+      }
+    }
     styleBodyRows(alloc, 2);
-    alloc.autoFilter = { from: "A1", to: "G" + alloc.rowCount };
-
-    const inputs = workbook.addWorksheet("Vstupní data", { views: [{ state: "frozen", ySplit: 1 }] });
-    inputs.addRow(["PŮVODNÍ PLATBY"]); styleHeader(inputs.getRow(1));
-    inputs.addRow(["Datum platby","Částka platby (Kč)","Vyřízeno (Kč)","Započteno jako platba?","Rozpoznaný řádek"]);
-    styleHeader(inputs.getRow(2));
-    r.paymentRows.forEach(p => inputs.addRow([dateFmt(p.date), Number(p.requestedAmount == null ? p.amount : p.requestedAmount), Number(p.amount), Number(p.amount) > 0 ? "Ano" : "Ne — 0 Kč vyřízeno", p.raw || "Ruční záznam"]));
-    const qStart = inputs.rowCount + 2;
-    inputs.addRow([]);
-    inputs.addRow(["PŘEDPISY POJISTNÉHO"]); styleHeader(inputs.getRow(inputs.rowCount));
-    inputs.addRow(["Čtvrtletí","Splatnost","Období pro výpočet","Základ (Kč)","Řádné pojistné (Kč)","Původní řádek"]);
-    styleHeader(inputs.getRow(inputs.rowCount));
-    r.quarters.forEach(q => inputs.addRow([q.period, dateFmt(q.dueDate), q.sourcePeriod || "", q.base || "", q.premium, q.raw || "Ruční záznam"]));
-    inputs.columns = [{width:18},{width:21},{width:18},{width:26},{width:72},{width:22}];
-    styleBodyRows(inputs, 3);
-    inputs.autoFilter = { from: "A2", to: "E" + (2 + r.paymentRows.length) };
+    alloc.autoFilter = { from: "A1", to: "F" + alloc.rowCount };
 
     const warnings = workbook.addWorksheet("Kontrola");
     warnings.columns = [{width:22},{width:100}];
@@ -2003,6 +2060,7 @@
     warnings.addRow(["Vzorec navýšení","I = H/10; J = ROUND(částka × I; 0). U částečné úhrady se počítá každá alokovaná část zvlášť; u otevřeného zůstatku se použije zbývající jistina."]);
     warnings.addRow(["Pravidlo přiřazení","Platby se započítávají nejprve na nejstarší neuhrazené řádné pojistné. Navýšení se hradí až po úhradě řádného pojistného."]);
     warnings.addRow(["Zdrojové soubory","Obsah vstupů se zpracoval v prohlížeči; do repozitáře ani na aplikační server nebyl poslán."]);
+    warnings.addRow(["Vzorce v Excelu","Souhrn, přehled čtvrtletí a započtení plateb jsou propojeny vzorci. List Vstupní data obsahuje 100 řádků pro platby a 40 řádků pro čtvrtletní předpisy. Nové platby přidávej do volných řádků chronologicky."]);
     if (r.warnings.length) {
       warnings.addRow([]);
       warnings.addRow(["UPOZORNĚNÍ","Ověř před použitím"]);
