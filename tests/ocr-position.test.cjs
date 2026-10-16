@@ -116,7 +116,19 @@ expected.forEach((row,index)=>{
 // screenshot-relative row tolerance.
 word("F7-Detail",80,2480,65,12);
 
-const result=parsePositionRows({words});
-const actual=result.rows.map(row=>[row.period,row.dueDate,row.sourcePeriod,row.base,row.premium]);
-assert.deepEqual(actual,expected,"OCR row grouping must keep every period, base and premium together; groups must concatenate left-to-right");
-console.log("PASS: position OCR recovers all 12 quarters, dates and values; the blank helper quarter is excluded.");
+for(let run=1;run<=10;run++){
+  // Simulate small OCR bounding-box jitter from different image preprocessing / PSM modes.
+  const jittered=words.map((item,index)=>{
+    const offset=((index*7+run*3)%7)-3;
+    return {...item,bbox:{...item.bbox,y0:item.bbox.y0+offset,y1:item.bbox.y1+offset}};
+  });
+  const result=parsePositionRows({words:jittered});
+  const actual=result.rows.map(row=>[row.period,row.dueDate,row.sourcePeriod,row.base,row.premium]);
+  assert.deepEqual(actual,expected,"OCR values must match on synthetic OCR pass "+run);
+  const q42024=actual.find(row=>row[0]==="Q4/2024");
+  const q12025=actual.find(row=>row[0]==="Q1/2025");
+  assert.deepEqual(q42024,["Q4/2024","2024-10-31","Q3/2024",277675,2332],"Q4/2024 must never reuse Q1/2025 values");
+  assert.deepEqual(q12025,["Q1/2025","2025-01-31","Q4/2024",222154,1866],"Q1/2025 values must stay on their own row");
+  assert.equal(actual.some(row=>row[0]==="Q3/2023"),false,"the blank helper Q3/2023 row must not be treated as a premium assessment");
+}
+console.log("PASS: 10/10 OCR-position simulations recover all 12 quarters and exclude the blank helper row.");
