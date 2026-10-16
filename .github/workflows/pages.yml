@@ -28,6 +28,7 @@ jobs:
         run: |
           node tests/regression.test.cjs
           node tests/ocr-position.test.cjs
+          node tests/excel-date.test.cjs
       - name: Cancel stale Pages runs
         env:
           GH_TOKEN: ${{ github.token }}
