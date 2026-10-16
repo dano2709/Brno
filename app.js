@@ -750,8 +750,9 @@
       const sourcePeriod=sourceTokens.length
         ? quarterMatch(sourceTokens[0].text).period
         : previousQuarterPeriod(anchor.info);
+      const dateCellLeft=firstQuarterColumnRight-Math.max(rowTolerance,medianWordHeight*2);
       const rowDates=rowWords
-        .filter(w=>w.cx>firstQuarterColumnRight && w.cx<baseLeft && dateMatches(w.text).length)
+        .filter(w=>w.cx>=dateCellLeft && w.cx<baseLeft && dateMatches(w.text).length)
         .flatMap(w=>dateMatches(w.text).map(d=>({text:d.text,cx:w.cx})))
         .sort((a,b)=>Math.abs(a.cx-dueHeaderX)-Math.abs(b.cx-dueHeaderX));
       const recognizedDate=rowDates.length?toISO(rowDates[0].text):"";
