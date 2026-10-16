@@ -1360,13 +1360,13 @@
         state.baseText = baseScan.text;
         const textQuarters = parseQuartersFromText(state.baseText);
         const rowVote = aggregateQuarterRowsFromOcrRounds(baseScan.rounds);
-        const gridRead = rowVote.quarters.length >= 8 ? null : await extractQuarterRowsFromGridImage(state.baseFile);
+        const gridRead = rowVote.ok && rowVote.quarters.length >= 8 ? null : await extractQuarterRowsFromGridImage(state.baseFile);
         state.basePositionPages = baseScan.rounds.filter(round=>round.data).map(round=>({data:round.data}));
 
         // Prefer per-row OCR consensus over pixel-grid segmentation. The previous
         // grid-border algorithm sometimes merged neighboring rows and shifted values
         // (e.g. copied Q3/2024 into Q2/2024).
-        if (rowVote.quarters.length >= 8) {
+        if (rowVote.ok && rowVote.quarters.length >= 8) {
           state.quarters = rowVote.quarters;
           cellRateCheck = repairPremiumsFromCommonRate(state.quarters, parseAmount($("rateInput").value));
           state.basePositionCheck = {
