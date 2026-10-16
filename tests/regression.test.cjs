@@ -140,19 +140,21 @@ function formulaSheetModel(quartersInput, paymentsInput, asOf) {
   return {totals,quarters:byQuarter};
 }
 
+const {quarters: expectedQuarters, ...expectedTotals} = expected;
+
 for (let run=1;run<=10;run++) {
   const quarters = run%2 ? quarterFixture : seededShuffle(quarterFixture,run);
   const payments = seededShuffle(paymentFixture,run*173);
   const appResult = runApplicationEngine(quarters,payments);
   const formulaResult = formulaSheetModel(quarters,payments,"2024-09-30");
-  assert.deepEqual(appResult.totals, expected, "application totals, run "+run);
+  assert.deepEqual(appResult.totals, expectedTotals, "application totals, run "+run);
   assert.deepEqual(
     appResult.quarters.map(q=>({period:q.period,paidPrincipal:q.paidPrincipal,remaining:q.remaining,totalAssessedFee:q.totalAssessedFee,feeUnpaid:q.feeUnpaid})),
-    expected.quarters,
+    expectedQuarters,
     "application quarterly results, run "+run
   );
-  assert.deepEqual(formulaResult.totals, expected, "independent Excel-formula model totals, run "+run);
-  assert.deepEqual(formulaResult.quarters, expected.quarters, "independent Excel-formula model quarterly results, run "+run);
+  assert.deepEqual(formulaResult.totals, expectedTotals, "independent Excel-formula model totals, run "+run);
+  assert.deepEqual(formulaResult.quarters, expectedQuarters, "independent Excel-formula model quarterly results, run "+run);
 }
 assert.ok(source.includes("\"<=\"&'Vstupní data'!$G$2"), "export formulas must support an as-of-date limit");
 assert.ok(source.includes("paymentInputRow}>'Vstupní data'!$G$2"), "payment allocation formulas must exclude payments after the selected calculation date");
