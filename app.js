@@ -621,113 +621,170 @@
       if (!text || !Number.isFinite(Number(bbox.x0)) || !Number.isFinite(Number(bbox.x1)) ||
           !Number.isFinite(Number(bbox.y0)) || !Number.isFinite(Number(bbox.y1))) return null;
       return {
-        text, norm: normalizeOcrWord(text),
+        text, norm:normalizeOcrWord(text),
         x0:Number(bbox.x0), x1:Number(bbox.x1), y0:Number(bbox.y0), y1:Number(bbox.y1),
         cx:(Number(bbox.x0)+Number(bbox.x1))/2,
-        cy:(Number(bbox.y0)+Number(bbox.y1))/2
+        cy:(Number(bbox.y0)+Number(bbox.y1))/2,
+        confidence:Number(word.confidence)||0
       };
     }).filter(Boolean);
-    if (words.length < 10) return { rows: [], reason: "OCR neposkytlo dostatek poloh slov pro rozdělení sloupců." };
-    const width = Math.max(...words.map(w=>w.x1), 1);
-    const height = Math.max(...words.map(w=>w.y1), 1);
-    const topWords = words.filter(w=>w.cy < height * 0.46);
-    const baseAnchor = topWords.find(w=>/^(zaklad|vyměř|vymerovac)/.test(w.norm));
-    if (!baseAnchor) return { rows: [], reason: "V záhlaví nebyl rozpoznán sloupec „základ pro výpočet“." };
+    if (words.length < 10) return { rows:[], reason:"OCR neposkytlo dostatek poloh slov pro rozdělení sloupců." };
 
-    const baseHeader = topWords.filter(w =>
-      Math.abs(w.cy-baseAnchor.cy) < height*0.11 &&
-      (w === baseAnchor || /^(pro|vypocet|zaklad|vyměř|vymerovac)/.test(w.norm)) &&
-      Math.abs(w.cx-baseAnchor.cx) < width*0.15
-    );
-    const baseX = baseHeader.length ? baseHeader.reduce((sum,w)=>sum+w.cx,0)/baseHeader.length : baseAnchor.cx;
+    const width=Math.max(...words.map(w=>w.x1),1);
+    const height=Math.max(...words.map(w=>w.y1),1);
+    const heights=words.map(w=>w.y1-w.y0).filter(h=>h>0).sort((a,b)=>a-b);
+    const medianWordHeight=heights.length?heights[Math.floor(heights.length/2)]:12;
+    const rowTolerance=Math.max(3,Math.min(8,medianWordHeight*0.52));
 
-    let premiumAnchor = topWords.find(w=>/^(radne|řádné)/.test(w.norm));
-    if (!premiumAnchor) {
-      premiumAnchor = topWords.filter(w=>/^pojistne/.test(w.norm) && w.cx > baseX)
-        .sort((a,b)=>a.cx-b.cx)[0];
+    // Find the column headings first, then identify quarter labels only in the
+    // first table column. Labels in "období pro výpočet" must never become row anchors.
+    const dateHeader=words
+      .filter(w=>w.norm==="splatnost")
+      .sort((a,b)=>a.cy-b.cy)[0] || null;
+    const preliminaryPeriodWords=words
+      .filter(w=>quarterMatch(w.text) && w.cx < (dateHeader ? dateHeader.cx : width*0.13))
+      .sort((a,b)=>a.cy-b.cy);
+    if(!preliminaryPeriodWords.length) {
+      return {rows:[],reason:"OCR nenašlo označení čtvrtletí v prvním sloupci; částky nebyly automaticky přiřazeny."};
     }
-    if (!premiumAnchor) return { rows: [], reason: "V záhlaví nebyl rozpoznán sloupec „řádné pojistné“." };
-    const premiumHeader = topWords.filter(w =>
-      Math.abs(w.cy-premiumAnchor.cy) < height*0.11 &&
-      (w === premiumAnchor || /^pojistne/.test(w.norm)) &&
-      w.cx > baseX && w.cx < width
-    );
-    const premiumX = premiumHeader.length ? premiumHeader.reduce((sum,w)=>sum+w.cx,0)/premiumHeader.length : premiumAnchor.cx;
-    if (!(premiumX > baseX)) return { rows: [], reason: "Nepodařilo se určit pořadí sloupců základ a pojistné." };
+    const firstPeriodY=preliminaryPeriodWords[0].cy;
+    const headerWords=words.filter(w=>w.cy < firstPeriodY-rowTolerance);
 
-    const prevCandidates = topWords.filter(w =>
-      w.cx < baseX && /^(zpusob|zamestnavani|obdobi|ctvrtleti|na)$/.test(w.norm)
+    const baseAnchor=headerWords
+      .filter(w=>/^(zaklad|vymerov)/.test(w.norm))
+      .sort((a,b)=>a.cy-b.cy)[0] || null;
+    if(!baseAnchor) return {rows:[],reason:"V záhlaví nebyl rozpoznán sloupec „základ pro výpočet“."};
+
+    const premiumAnchor=headerWords
+      .filter(w=>/^(radne|pojistne)/.test(w.norm) && w.cx>baseAnchor.cx)
+      .sort((a,b)=>{
+        const aIsRegular=/^radne/.test(a.norm)?0:1;
+        const bIsRegular=/^radne/.test(b.norm)?0:1;
+        return aIsRegular-bIsRegular || a.cy-b.cy;
+      })[0] || null;
+    if(!premiumAnchor) return {rows:[],reason:"V záhlaví nebyl rozpoznán sloupec „řádné pojistné“."};
+
+    const headerBand=Math.max(rowTolerance*3,medianWordHeight*3);
+    const baseHeader=headerWords.filter(w=>
+      Math.abs(w.cy-baseAnchor.cy)<=headerBand &&
+      /^(zaklad|pro|vypocet|vymerov)/.test(w.norm) &&
+      Math.abs(w.cx-baseAnchor.cx)<width*0.12
     );
-    const previousX = prevCandidates.length ? Math.max(...prevCandidates.map(w=>w.cx)) : null;
-    const baseLeft = previousX == null ? 0 : (previousX+baseX)/2;
-    const boundary = (baseX+premiumX)/2;
-    // OCR word boxes on multi-line table cells may vary by several pixels. Group by
-    // a tolerance below half a row height, so labels and numbers stay on the same row.
-    const wordHeights = words.map(w=>w.y1-w.y0).filter(h=>h>0).sort((a,b)=>a-b);
-    const medianWordHeight = wordHeights.length
-      ? wordHeights[Math.floor(wordHeights.length/2)]
-      : 12;
-    // Do not scale line grouping by the full screenshot height: that merged
-    // neighboring quarters on tall screenshots and copied values into adjacent rows.
-    const tolerance = Math.max(3, Math.min(8, medianWordHeight*0.52));
-    const sorted = words.slice().sort((a,b)=>a.cy-b.cy || a.cx-b.cx);
-    const grouped = [];
-    sorted.forEach(word=>{
-      let row = grouped[grouped.length-1];
-      // Compare with a stable first-word anchor to prevent gradual drift across rows.
-      if (!row || Math.abs(word.cy-row.anchorY) > tolerance) {
-        row = { words:[], anchorY:word.cy, meanY:word.cy };
-        grouped.push(row);
-      }
-      row.words.push(word);
-      row.meanY = row.words.reduce((sum,w)=>sum+w.cy,0)/row.words.length;
-    });
+    const baseX=baseHeader.length
+      ? baseHeader.reduce((sum,w)=>sum+w.cx,0)/baseHeader.length
+      : baseAnchor.cx;
+    const premiumHeader=headerWords.filter(w=>
+      Math.abs(w.cy-premiumAnchor.cy)<=headerBand &&
+      /^(radne|pojistne)/.test(w.norm) &&
+      w.cx>baseX
+    );
+    const premiumX=premiumHeader.length
+      ? premiumHeader.reduce((sum,w)=>sum+w.cx,0)/premiumHeader.length
+      : premiumAnchor.cx;
+    const boundary=(baseX+premiumX)/2;
+    if(!(boundary>baseX && premiumX>baseX)) {
+      return {rows:[],reason:"Nepodařilo se spolehlivě oddělit sloupce základu a řádného pojistného."};
+    }
+
+    const dueHeaderX=dateHeader ? dateHeader.cx : width*0.13;
+    const sourceHeaderWords=headerWords.filter(w=>
+      w.cx>dueHeaderX && w.cx<baseX && /^(obdobi|pro|vypocet)/.test(w.norm)
+    );
+    const sourceHeaderX=sourceHeaderWords.length
+      ? sourceHeaderWords.reduce((sum,w)=>sum+w.cx,0)/sourceHeaderWords.length
+      : (dueHeaderX+baseX)/2;
+    const firstQuarterColumnRight=dateHeader ? dateHeader.cx : width*0.13;
+    const lastPriorHeader=headerWords.filter(w=>
+      w.cx<baseX && /^(zpusob|zamestnavani|obdobi|ctvrtleti|na)$/.test(w.norm)
+    ).sort((a,b)=>b.cx-a.cx)[0] || null;
+    const baseLeft=lastPriorHeader
+      ? (lastPriorHeader.cx+baseX)/2
+      : Math.max(sourceHeaderX,baseX-width*0.12);
+
+    // One row anchor = one quarter label in the first column. Set row boundaries at
+    // the midpoint between adjacent anchors. This is robust even when the OCR puts
+    // the base/premium words 2–4 px above/below the period label or merges text lines.
+    const anchors=[];
+    for(const word of preliminaryPeriodWords) {
+      const info=quarterMatch(word.text);
+      if(!info) continue;
+      const existing=anchors.find(a=>Math.abs(a.y-word.cy)<=rowTolerance*2);
+      if(existing) {
+        const isBetter=word.confidence>existing.word.confidence ||
+          (word.text.length>existing.word.text.length && info.year>=existing.info.year);
+        if(isBetter){existing.word=word;existing.info=info;existing.y=word.cy;}
+      } else anchors.push({word,info,y:word.cy});
+    }
+    anchors.sort((a,b)=>a.y-b.y);
+    const uniqueAnchors=[];
+    for(const anchor of anchors) {
+      const prior=uniqueAnchors[uniqueAnchors.length-1];
+      if(prior && validationPeriodOrdinal(anchor.info.period)===validationPeriodOrdinal(prior.info.period)) {
+        if(anchor.word.confidence>prior.word.confidence) uniqueAnchors[uniqueAnchors.length-1]=anchor;
+      } else uniqueAnchors.push(anchor);
+    }
+    if(uniqueAnchors.length<8) {
+      return {rows:[],reason:"V prvním sloupci bylo nalezeno pouze "+uniqueAnchors.length+" řádkových označení čtvrtletí."};
+    }
 
     function numberInCell(cellWords) {
-      // OCR words must be concatenated strictly from left to right in the cell.
-      // Sorting by vertical center first can turn "296 812" into "812296".
-      const parts = cellWords.slice().sort((a,b)=>a.cx-b.cx)
+      const parts=cellWords.slice().sort((a,b)=>a.cx-b.cx)
         .map(w=>String(w.text).trim())
         .filter(t=>/\d/.test(t))
         .map(t=>t.replace(/[^\d,.-]/g,""))
         .filter(t=>t && /^\d[\d,.-]*$/.test(t));
-      if (!parts.length) return null;
-      // Thousands can be OCR'd as separate words (e.g. 258 + 475).
-      // Known cell boundaries keep base and premium digits separate.
-      const val = parseAmount(parts.join(""));
-      return val == null ? null : val;
+      if(!parts.length) return null;
+      const value=parseAmount(parts.join(""));
+      return value==null?null:value;
     }
 
-    const resultRows = grouped.map(row=>{
-      const rowWords = row.words;
-      const line = rowWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ");
-      const quarterLabels = Array.from(line.matchAll(/(?:\bQ\s*[1-4]\s*[\/.\-]\s*\d{2,4}\b|\b[1-4]\s*Q\s*[\/.\-]\s*\d{2,4}\b)/gi), m => quarterMatch(m[0])).filter(Boolean);
-      const dates = dateMatches(line);
-      // Valid source rows may contain two quarter labels: the quarter itself and
-      // "období pro výpočet". Three or more usually mean adjacent physical rows were
-      // merged; reject those instead of attaching their amounts to the wrong quarter.
-      if (quarterLabels.length > 2) return null;
-      const q = quarterLabels[0] || quarterMatch(line) || (dates.length ? quarterFromDueDate(dates[0].text) : null);
-      const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
-      let rowBaseLeft = baseLeft;
-      if (previousX == null) {
-        const leftSemanticWords = rowWords.filter(w =>
-          w.cx < boundary && (quarterMatch(w.text) || dateMatches(w.text).length > 0)
-        );
-        if (leftSemanticWords.length) {
-          rowBaseLeft = Math.max(rowBaseLeft, Math.max(...leftSemanticWords.map(w=>w.cx)) + 1);
-        }
-      }
-      const baseWords = rowWords.filter(w=>w.cx >= rowBaseLeft && w.cx < boundary);
-      const premiumWords = rowWords.filter(w=>w.cx >= boundary);
-      const base = numberInCell(baseWords);
-      const premium = numberInCell(premiumWords);
-      return { period:q ? q.period : "", sourcePeriod, dueDate:dates.length ? toISO(dates[0].text) : "", base, premium, y:row.meanY, line };
-    }).filter(row=>row && row.base > 0 && row.premium > 0 && row.base <= 10000000 && row.premium < 100000);
+    const rows=[];
+    uniqueAnchors.forEach((anchor,index)=>{
+      const top=index===0 ? -Infinity : (uniqueAnchors[index-1].y+anchor.y)/2;
+      const bottom=index===uniqueAnchors.length-1 ? Infinity : (anchor.y+uniqueAnchors[index+1].y)/2;
+      const rowWords=words.filter(w=>w.cy>=top && w.cy<bottom);
+      const period=anchor.info.period;
+      const sourceTokens=rowWords
+        .filter(w=>w.cx>firstQuarterColumnRight && w.cx<baseLeft && quarterMatch(w.text))
+        .sort((a,b)=>a.cx-b.cx);
+      const sourcePeriod=sourceTokens.length
+        ? quarterMatch(sourceTokens[0].text).period
+        : previousQuarterPeriod(anchor.info);
+      const rowDates=rowWords
+        .filter(w=>w.cx>firstQuarterColumnRight && w.cx<baseLeft && dateMatches(w.text).length)
+        .flatMap(w=>dateMatches(w.text).map(d=>({text:d.text,cx:w.cx})))
+        .sort((a,b)=>Math.abs(a.cx-dueHeaderX)-Math.abs(b.cx-dueHeaderX));
+      const recognizedDate=rowDates.length?toISO(rowDates[0].text):"";
+      const expectedDueMonth=anchor.info.quarter*3-2;
+      const expectedDue=toISO(new Date(anchor.info.year,expectedDueMonth,0));
+      const dueDate=recognizedDate && quarterFromDueDate(recognizedDate)?.period===period
+        ? recognizedDate
+        : expectedDue;
+
+      const baseWords=rowWords.filter(w=>w.cx>=baseLeft && w.cx<boundary);
+      const premiumWords=rowWords.filter(w=>w.cx>=boundary);
+      const base=numberInCell(baseWords);
+      const premium=numberInCell(premiumWords);
+      if(!(base>1000 && base<=10000000 && premium>=1 && premium<=100000)) return;
+
+      const rowText=rowWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ");
+      rows.push({
+        period,dueDate,sourcePeriod,base:Math.round(base),premium:Math.round(premium),
+        raw:"Čtení podle kotevního řádku "+anchor.word.text+"; základ: "+
+          baseWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ")+
+          "; pojistné: "+premiumWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" "),
+        y:anchor.y,line:rowText
+      });
+    });
+
+    rows.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+    const rowPeriods=rows.map(r=>validationPeriodOrdinal(r.period));
+    const sequential=rows.length>=8 && rowPeriods.every((value,index)=>index===0 || value===rowPeriods[index-1]+1);
     return {
-      rows:resultRows,
+      rows,
       columns:{baseX,premiumX,baseLeft,boundary,width,height},
-      reason:resultRows.length ? "" : "V určených sloupcích nebyly nalezeny oddělené číselné hodnoty."
+      reason:rows.length ? (sequential?"":"Některá čtvrtletí chybí nebo nejsou navazující.") :
+        "Označení čtvrtletí byla nalezena, ale samostatné buňky základu a pojistného nebyly bezpečně přečteny."
     };
   }
 
