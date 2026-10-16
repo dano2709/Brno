@@ -695,9 +695,10 @@
       const line = rowWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ");
       const quarterLabels = Array.from(line.matchAll(/(?:\bQ\s*[1-4]\s*[\/.\-]\s*\d{2,4}\b|\b[1-4]\s*Q\s*[\/.\-]\s*\d{2,4}\b)/gi), m => quarterMatch(m[0])).filter(Boolean);
       const dates = dateMatches(line);
-      // A cluster that contains two quarter labels is still two physical rows.
-      // Ignore mixed clusters rather than assigning the first row's label to the next row's amounts.
-      if (quarterLabels.length > 1) return null;
+      // Valid source rows may contain two quarter labels: the quarter itself and
+      // "období pro výpočet". Three or more usually mean adjacent physical rows were
+      // merged; reject those instead of attaching their amounts to the wrong quarter.
+      if (quarterLabels.length > 2) return null;
       const q = quarterLabels[0] || quarterMatch(line) || (dates.length ? quarterFromDueDate(dates[0].text) : null);
       const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
       let rowBaseLeft = baseLeft;
