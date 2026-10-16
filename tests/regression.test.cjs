@@ -36,7 +36,7 @@ function parseAmount(value) {
 const dateFmt = value => value || "";
 const currencyFmt = value => Math.round(Number(value)||0).toLocaleString("cs-CZ") + " Kč";
 const engineFactory = new Function(
-  "state","$","isoToday","validISODate","monthsLate","dateFmt","currencyFmt","parseAmount","templateLateIncrease",
+  "state","$","isoToday","validISODate","monthsLate","dateFmt","currencyFmt","parseAmount","templateLateIncrease","validationPeriodOrdinal",
   computeSource + "\nreturn computeResults;"
 );
 
@@ -68,6 +68,10 @@ const expected = {
   ]
 };
 
+function validationPeriodOrdinal(value) {
+  const m = String(value || "").match(/^Q([1-4])\/(\d{4})$/i);
+  return m ? Number(m[2]) * 4 + Number(m[1]) - 1 : null;
+}
 function seededShuffle(items, seed) {
   const out = items.slice();
   let x = seed >>> 0;
@@ -86,7 +90,7 @@ function runApplicationEngine(quarters, payments) {
     sourceRate:null
   };
   const controls = id => ({value: id==="asOfDate" ? "2024-09-30" : ""});
-  const calculate = engineFactory(state,controls,()=>"2024-09-30",validISODate,monthsLate,dateFmt,currencyFmt,parseAmount,templateLateIncrease);
+  const calculate = engineFactory(state,controls,()=>"2024-09-30",validISODate,monthsLate,dateFmt,currencyFmt,parseAmount,templateLateIncrease,validationPeriodOrdinal);
   return calculate();
 }
 
