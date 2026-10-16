@@ -19,7 +19,7 @@ const tests=[
   ["Czech date", "18.10.2024", 45583],
   ["January date", "31.01.2025", 45688],
   ["start of statement", "24.10.2023", 45223],
-  ["zero-padded ISO", "2026-09-30", 46395]
+  ["zero-padded ISO", "2026-09-30", 46295]
 ];
 for(const [label,input,expected] of tests){
   assert.equal(helpers.excelDateSerial(input),expected,label+" must map to the correct Excel serial date");
