@@ -775,12 +775,16 @@
     quarters.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
     const sequential = quarters.length >= 8 && quarters.every((q,i)=>i===0 ||
       validationPeriodOrdinal(q.period)===validationPeriodOrdinal(quarters[i-1].period)+1);
+    const minimumVotes = Math.max(10, Math.ceil(usableRounds.length * 0.6));
+    const consensusEnough = usableRounds.length >= 15 && quarters.length > 0 &&
+      quarters.every(q=>q.ocrVotes >= minimumVotes);
+    const verified = sequential && consensusEnough;
     return {
       quarters, diagnostics, usableRounds:usableRounds.length,
-      ok:sequential,
-      detail:sequential
-        ? "Předpisy byly sloučeny hlasováním nad samostatně rozpoznanými sloupci; splatnosti byly odvozeny z označení čtvrtletí."
-        : "Hlasování po sloupcích našlo "+quarters.length+" čtvrtletí. Některé řádky mohou chybět nebo být mimo pořadí."
+      ok:verified,
+      detail:verified
+        ? "Předpisy mají souvislou řadu čtvrtletí a každá částka získala nejméně "+minimumVotes+" nezávislých hlasů z "+usableRounds.length+" čtení."
+        : "Hlasování po sloupcích našlo "+quarters.length+" čtvrtletí. Souvislá řada: "+(sequential?"ano":"ne")+"; dostatečná shoda OCR: "+(consensusEnough?"ano":"ne")+". Ověř nejasné řádky."
     };
   }
 
@@ -1878,6 +1882,19 @@
     }
 
     quarters.sort((a,b) => a.dueDate.localeCompare(b.dueDate));
+    // Systematic OCR row-shifts can preserve the same premium/base rate, so add an
+    // independent plausibility check for identical values in consecutive quarters.
+    for (let i=1;i<quarters.length;i++) {
+      const previous=quarters[i-1], current=quarters[i];
+      const prevOrdinal=validationPeriodOrdinal(previous.period), currentOrdinal=validationPeriodOrdinal(current.period);
+      if (prevOrdinal!=null && currentOrdinal===prevOrdinal+1 &&
+          previous.base>0 && previous.premium>0 &&
+          previous.base===current.base && previous.premium===current.premium) {
+        warnings.push("Podezřelá shoda předpisů: "+previous.period+" a "+current.period+
+          " mají totožný základ "+currencyFmt(current.base)+" a pojistné "+currencyFmt(current.premium)+
+          ". Ověř, že OCR nepřiřadilo jeden řádek dvakrát.");
+      }
+    }
     payments.sort((a,b) => a.date.localeCompare(b.date) || a.index - b.index);
     const detail = [];
     let overpayment = 0;
