@@ -493,9 +493,13 @@
           const signature = usePositionSignature
             ? JSON.stringify(positionResult.rows.map(row => [row.period, row.dueDate, row.base, row.premium]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))
             : canonicalOcrSignature(kind, text);
-          const parsedRows = kind==="payments" ? parsePaymentText(text,false) : [];
+          const positionedPayments = kind==="payments" && data ? parsePaymentsFromPositionData(data) : [];
+          const parsedRows = kind==="payments"
+            ? (positionedPayments.length >= 8 ? positionedPayments : parsePaymentText(text,false))
+            : [];
+          const textPaymentRows = kind==="payments" ? parsePaymentText(text,false).length : 0;
           const parsedCount = kind === "payments"
-            ? parsedRows.length
+            ? Math.max(parsedRows.length,textPaymentRows)
             : Math.max(parseQuartersFromText(text).length, positionResult ? positionResult.rows.length : 0);
           rounds.push({ number, text, data, parsedRows, positionRows:positionResult ? positionResult.rows : [], signature, parsedCount, positionCount:positionResult ? positionResult.rows.length : 0, score: parsedCount * 10000 + (usePositionSignature ? 5000 : 0) + text.length });
         } catch (error) {
@@ -829,6 +833,80 @@
 
 
 
+  function parsePaymentsFromPositionData(data) {
+    const rawWords = data && Array.isArray(data.words) ? data.words : [];
+    const words = rawWords.map(word => {
+      const bbox=word.bbox||{};
+      const text=String(word.text||"").trim();
+      if(!text || !Number.isFinite(Number(bbox.x0)) || !Number.isFinite(Number(bbox.x1)) ||
+        !Number.isFinite(Number(bbox.y0)) || !Number.isFinite(Number(bbox.y1))) return null;
+      return {
+        text,norm:normalizeOcrWord(text),
+        x0:Number(bbox.x0),x1:Number(bbox.x1),y0:Number(bbox.y0),y1:Number(bbox.y1),
+        cx:(Number(bbox.x0)+Number(bbox.x1))/2,cy:(Number(bbox.y0)+Number(bbox.y1))/2,
+        confidence:Number(word.confidence)||0
+      };
+    }).filter(Boolean);
+    if(words.length<12) return [];
+    const width=Math.max(...words.map(w=>w.x1),1);
+    const height=Math.max(...words.map(w=>w.y1),1);
+    const yTolerance=Math.max(2,height*0.008);
+    const sorted=words.slice().sort((a,b)=>a.cy-b.cy||a.cx-b.cx);
+    const groups=[];
+    for(const word of sorted){
+      const last=groups[groups.length-1];
+      if(!last||Math.abs(word.cy-last.meanY)>yTolerance) groups.push({words:[word],meanY:word.cy});
+      else {
+        last.words.push(word);
+        last.meanY=last.words.reduce((sum,w)=>sum+w.cy,0)/last.words.length;
+      }
+    }
+    const header=groups.find(row=>{
+      const norms=row.words.map(w=>w.norm);
+      return norms.some(n=>n==="castka")&&norms.some(n=>n.startsWith("vyrizeno"))&&
+        (norms.some(n=>n==="dat"||n==="datum"||n.startsWith("date"))||
+         row.words.some(w=>w.norm==="platby"&&w.cx>row.words.find(x=>x.norm.startsWith("vyrizeno")).cx));
+    });
+    if(!header) return [];
+    const amountHeader=header.words.find(w=>w.norm==="castka");
+    const processedHeader=header.words.find(w=>w.norm.startsWith("vyrizeno"));
+    const explicitDateHeader=header.words.find(w=>w.norm==="dat"||w.norm==="datum"||w.norm.startsWith("date"));
+    const dateHeader=explicitDateHeader || header.words.filter(w=>w.norm==="platby"&&w.cx>processedHeader.cx).sort((a,b)=>a.cx-b.cx)[0];
+    if(!amountHeader||!processedHeader||!dateHeader) return [];
+    const x1=(amountHeader.cx+processedHeader.cx)/2;
+    const x2=(processedHeader.cx+dateHeader.cx)/2;
+    if(!(x1>amountHeader.cx&&x2>x1)) return [];
+
+    const parsed=[];
+    for(const row of groups){
+      if(row.meanY<=header.meanY+yTolerance*2) continue;
+      const cellText=(lo,hi)=>row.words.filter(w=>w.cx>=lo&&w.cx<hi).sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ");
+      const requestedText=cellText(0,x1);
+      const processedText=cellText(x1,x2);
+      const dateText=cellText(x2,width+1).replace(/\s+/g,"");
+      const dateMatch=dateText.match(/\d{1,2}[./-]\d{1,2}[./-]\d{2,4}/);
+      if(!dateMatch) continue;
+      const date=toISO(dateMatch[0]);
+      const requestedAmount=parseAmount(requestedText);
+      const amount=parseAmount(processedText);
+      if(!validISODate(date)||requestedAmount==null||amount==null||requestedAmount<0||amount<0||amount>requestedAmount) continue;
+      const confidenceWords=row.words.filter(w=>w.cx<width);
+      const confidence=confidenceWords.length?Math.round(confidenceWords.reduce((sum,w)=>sum+w.confidence,0)/confidenceWords.length):0;
+      parsed.push({
+        date,
+        requestedAmount:Math.round(requestedAmount*100)/100,
+        amount:Math.round(amount*100)/100,
+        raw:requestedText.trim()+" | "+processedText.trim()+" | "+dateMatch[0],
+        ocrConfidence:confidence,
+        ocrSource:"oddělené sloupce"
+      });
+    }
+    // The console view can include duplicate footer/header rows; only accept rows
+    // with valid date + both amount cells, and keep a stable column-based ordering.
+    parsed.sort((a,b)=>a.date.localeCompare(b.date)||a.requestedAmount-b.requestedAmount||a.amount-b.amount);
+    return parsed;
+  }
+
   function aggregatePaymentReadings(rounds, supplementalReadings = []) {
     const slots = new Map();
     let usableRounds = 0;
@@ -851,7 +929,10 @@
     for (const round of rounds) {
       if (!round || !round.text) continue;
       usableRounds++;
-      addRows(parsePaymentText(round.text, false), false);
+      const rows = Array.isArray(round.parsedRows) && round.parsedRows.length >= 8
+        ? round.parsedRows
+        : parsePaymentText(round.text, false);
+      addRows(rows, false);
     }
     for (const reading of supplementalReadings) addRows(reading, true);
     const minPresence = Math.max(6, Math.ceil(rounds.length * 0.30));
@@ -1360,13 +1441,13 @@
         state.baseText = baseScan.text;
         const textQuarters = parseQuartersFromText(state.baseText);
         const rowVote = aggregateQuarterRowsFromOcrRounds(baseScan.rounds);
-        const gridRead = rowVote.ok && rowVote.quarters.length >= 8 ? null : await extractQuarterRowsFromGridImage(state.baseFile);
+        const gridRead = rowVote.quarters.length >= 8 ? null : await extractQuarterRowsFromGridImage(state.baseFile);
         state.basePositionPages = baseScan.rounds.filter(round=>round.data).map(round=>({data:round.data}));
 
         // Prefer per-row OCR consensus over pixel-grid segmentation. The previous
         // grid-border algorithm sometimes merged neighboring rows and shifted values
         // (e.g. copied Q3/2024 into Q2/2024).
-        if (rowVote.ok && rowVote.quarters.length >= 8) {
+        if (rowVote.quarters.length >= 8) {
           state.quarters = rowVote.quarters;
           cellRateCheck = repairPremiumsFromCommonRate(state.quarters, parseAmount($("rateInput").value));
           state.basePositionCheck = {
