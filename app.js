@@ -118,6 +118,14 @@
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
 
+  // Excel serial dates avoid browser timezone conversions when ExcelJS writes Date objects.
+  // Excel's 1900 date system uses serial 25569 for 1970-01-01.
+  function excelDateSerial(value) {
+    const d = parseDate(value);
+    if (!d) return null;
+    return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000) + 25569;
+  }
+
   function parseAmount(value) {
     if (value instanceof Date) return null;
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -2156,11 +2164,11 @@
         const fee = allocation ? allocation.fee : (openFee ? q.feeOnOutstanding : 0);
         const row = [
           first ? shortQuarter(q.period) : "",
-          first ? (parseDate(q.dueDate) || "") : "",
+          first ? (excelDateSerial(q.dueDate) ?? "") : "",
           first ? shortQuarter(q.sourcePeriod) : "",
           first ? (q.base || "") : "",
           first ? q.premium : "",
-          allocation ? (parseDate(allocation.date) || "") : "",
+          allocation ? (excelDateSerial(allocation.date) ?? "") : "",
           allocation ? Math.round(allocation.amount) : "",
           delay == null ? "" : String(delay),
           delay == null ? "" : delay / 10,
@@ -2208,11 +2216,11 @@
     const sortedInputPayments = r.paymentRows.slice().sort((a,b) => String(a.date || "").localeCompare(String(b.date || "")));
     for (let i=0;i<paymentCapacity;i++) {
       const p = sortedInputPayments[i];
-      const row = inputs.addRow(p ? [parseDate(p.date) || null, Number(p.requestedAmount == null ? p.amount : p.requestedAmount) || 0, Number(p.amount) || 0, Number(p.amount) > 0 ? "Ano" : "Ne — 0 Kč vyřízeno", p.raw || "Ruční záznam"] : [null,null,null,"",""]);
+      const row = inputs.addRow(p ? [excelDateSerial(p.date), Number(p.requestedAmount == null ? p.amount : p.requestedAmount) || 0, Number(p.amount) || 0, Number(p.amount) > 0 ? "Ano" : "Ne — 0 Kč vyřízeno", p.raw || "Ruční záznam"] : [null,null,null,"",""]);
       row.getCell(1).numFmt = "dd.mm.yyyy";
       [1,2,3].forEach(ci => row.getCell(ci).font = { color: { argb: "FF0070C0" } });
     }
-    inputs.getCell("G2").value = parseDate(r.asOf) || null;
+    inputs.getCell("G2").value = excelDateSerial(r.asOf);
     inputs.getCell("G2").numFmt = "dd.mm.yyyy";
     inputs.getCell("G2").font = { color: { argb: "FF0070C0" } };
     inputs.getCell("G1").font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -2222,7 +2230,7 @@
     styleHeader(inputs.getRow(quarterStart-1));
     for (let i=0;i<quarterCapacity;i++) {
       const q = r.quarters[i];
-      const row = inputs.addRow(q ? [q.period, parseDate(q.dueDate) || null, q.sourcePeriod || "", Number(q.base) || 0, Number(q.premium) || 0, q.raw || "Ruční záznam"] : [null,null,"",null,null,""]);
+      const row = inputs.addRow(q ? [q.period, excelDateSerial(q.dueDate), q.sourcePeriod || "", Number(q.base) || 0, Number(q.premium) || 0, q.raw || "Ruční záznam"] : [null,null,"",null,null,""]);
       row.getCell(2).numFmt = "dd.mm.yyyy";
       [1,2,3,4,5].forEach(ci => row.getCell(ci).font = { color: { argb: "FF0070C0" } });
     }
