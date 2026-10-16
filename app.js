@@ -655,13 +655,20 @@
     const boundary = (baseX+premiumX)/2;
     // OCR word boxes on multi-line table cells may vary by several pixels. Group by
     // a tolerance below half a row height, so labels and numbers stay on the same row.
-    const tolerance = Math.max(8,height*0.016);
+    const wordHeights = words.map(w=>w.y1-w.y0).filter(h=>h>0).sort((a,b)=>a-b);
+    const medianWordHeight = wordHeights.length
+      ? wordHeights[Math.floor(wordHeights.length/2)]
+      : 12;
+    // Do not scale line grouping by the full screenshot height: that merged
+    // neighboring quarters on tall screenshots and copied values into adjacent rows.
+    const tolerance = Math.max(3, Math.min(8, medianWordHeight*0.52));
     const sorted = words.slice().sort((a,b)=>a.cy-b.cy || a.cx-b.cx);
     const grouped = [];
     sorted.forEach(word=>{
       let row = grouped[grouped.length-1];
-      if (!row || Math.abs(word.cy-row.meanY) > tolerance) {
-        row = { words:[], meanY:word.cy };
+      // Compare with a stable first-word anchor to prevent gradual drift across rows.
+      if (!row || Math.abs(word.cy-row.anchorY) > tolerance) {
+        row = { words:[], anchorY:word.cy, meanY:word.cy };
         grouped.push(row);
       }
       row.words.push(word);
@@ -669,7 +676,9 @@
     });
 
     function numberInCell(cellWords) {
-      const parts = cellWords
+      // OCR words must be concatenated strictly from left to right in the cell.
+      // Sorting by vertical center first can turn "296 812" into "812296".
+      const parts = cellWords.slice().sort((a,b)=>a.cx-b.cx)
         .map(w=>String(w.text).trim())
         .filter(t=>/\d/.test(t))
         .map(t=>t.replace(/[^\d,.-]/g,""))
@@ -683,9 +692,12 @@
 
     const resultRows = grouped.map(row=>{
       const rowWords = row.words;
-      const line = rowWords.map(w=>w.text).join(" ");
+      const line = rowWords.slice().sort((a,b)=>a.cx-b.cx).map(w=>w.text).join(" ");
       const quarterLabels = Array.from(line.matchAll(/(?:\bQ\s*[1-4]\s*[\/.\-]\s*\d{2,4}\b|\b[1-4]\s*Q\s*[\/.\-]\s*\d{2,4}\b)/gi), m => quarterMatch(m[0])).filter(Boolean);
       const dates = dateMatches(line);
+      // A cluster that contains two quarter labels is still two physical rows.
+      // Ignore mixed clusters rather than assigning the first row's label to the next row's amounts.
+      if (quarterLabels.length > 1) return null;
       const q = quarterLabels[0] || quarterMatch(line) || (dates.length ? quarterFromDueDate(dates[0].text) : null);
       const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
       let rowBaseLeft = baseLeft;
@@ -702,7 +714,7 @@
       const base = numberInCell(baseWords);
       const premium = numberInCell(premiumWords);
       return { period:q ? q.period : "", sourcePeriod, dueDate:dates.length ? toISO(dates[0].text) : "", base, premium, y:row.meanY, line };
-    }).filter(row=>row.base > 0 && row.premium > 0 && row.base <= 10000000 && row.premium < 100000);
+    }).filter(row=>row && row.base > 0 && row.premium > 0 && row.base <= 10000000 && row.premium < 100000);
     return {
       rows:resultRows,
       columns:{baseX,premiumX,baseLeft,boundary,width,height},
