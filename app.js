@@ -679,9 +679,9 @@
       const rowWords = row.words;
       const line = rowWords.map(w=>w.text).join(" ");
       const quarterLabels = Array.from(line.matchAll(/(?:\bQ\s*[1-4]\s*[\/.\-]\s*\d{2,4}\b|\b[1-4]\s*Q\s*[\/.\-]\s*\d{2,4}\b)/gi), m => quarterMatch(m[0])).filter(Boolean);
-      const q = quarterLabels[0] || quarterMatch(line);
-      const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
       const dates = dateMatches(line);
+      const q = quarterLabels[0] || quarterMatch(line) || (dates.length ? quarterFromDueDate(dates[0].text) : null);
+      const sourcePeriod = quarterLabels.length > 1 ? quarterLabels[1].period : "";
       let rowBaseLeft = baseLeft;
       if (previousX == null) {
         const leftSemanticWords = rowWords.filter(w =>
@@ -701,6 +701,67 @@
       rows:resultRows,
       columns:{baseX,premiumX,baseLeft,boundary,width,height},
       reason:resultRows.length ? "" : "V určených sloupcích nebyly nalezeny oddělené číselné hodnoty."
+    };
+  }
+
+  function aggregateQuarterRowsFromOcrRounds(rounds) {
+    const votesByPeriod = new Map();
+    const usableRounds = (rounds || []).filter(round => round && (round.positionRows || round.data));
+    for (const round of usableRounds) {
+      const parsed = Array.isArray(round.positionRows)
+        ? round.positionRows
+        : positionRowsFromData(round.data).rows;
+      const seenThisRound = new Set();
+      for (const row of parsed) {
+        const match = quarterMatch(row.period);
+        if (!match || match.year < 2023 || !(row.base > 1000 && row.base <= 10000000) ||
+            !(row.premium >= 1 && row.premium <= 100000)) continue;
+        const period = match.period;
+        if (seenThisRound.has(period)) continue;
+        seenThisRound.add(period);
+        if (!votesByPeriod.has(period)) votesByPeriod.set(period, new Map());
+        const choices = votesByPeriod.get(period);
+        const key = String(Math.round(row.base)) + "|" + String(Math.round(row.premium));
+        if (!choices.has(key)) choices.set(key, { base:Math.round(row.base), premium:Math.round(row.premium), votes:0, lines:[], dates:[], sources:[] });
+        const choice = choices.get(key);
+        choice.votes++;
+        if (row.line) choice.lines.push(row.line);
+        if (row.dueDate) choice.dates.push(row.dueDate);
+        if (row.sourcePeriod) choice.sources.push(row.sourcePeriod);
+      }
+    }
+
+    const quarters = [];
+    const diagnostics = [];
+    for (const [period, choices] of votesByPeriod.entries()) {
+      const ordered = Array.from(choices.values()).sort((a,b)=>b.votes-a.votes);
+      const winner = ordered[0];
+      if (!winner) continue;
+      const info = quarterMatch(period);
+      const dueMonth = info.quarter * 3 - 2;
+      const dueDate = toISO(new Date(info.year, dueMonth, 0));
+      const sourceVotes = new Map();
+      winner.sources.forEach(value=>sourceVotes.set(value,(sourceVotes.get(value)||0)+1));
+      const sourcePeriod = Array.from(sourceVotes.entries()).sort((a,b)=>b[1]-a[1])[0]?.[0] || previousQuarterPeriod(info);
+      quarters.push({
+        period, dueDate, sourcePeriod,
+        base:winner.base, premium:winner.premium,
+        raw:"OCR hlasování po sloupcích: "+winner.votes+"/"+usableRounds.length+" čtení; "+(winner.lines[0]||""),
+        ocrVotes:winner.votes,
+        ocrAlternatives:ordered.length,
+        dueDateDerived:true
+      });
+      diagnostics.push({period,votes:winner.votes,alternatives:ordered.length,base:winner.base,premium:winner.premium});
+    }
+    quarters.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+    const sequential = quarters.length >= 8 && quarters.every((q,i)=>i===0 ||
+      validationPeriodOrdinal(q.period)===validationPeriodOrdinal(quarters[i-1].period)+1);
+    return {
+      quarters, diagnostics, usableRounds:usableRounds.length,
+      ok:sequential,
+      detail:sequential
+        ? "Předpisy byly sloučeny hlasováním nad samostatně rozpoznanými sloupci; splatnosti byly odvozeny z označení čtvrtletí."
+        : "Hlasování po sloupcích našlo "+quarters.length+" čtvrtletí. Některé řádky mohou chybět nebo být mimo pořadí."
     };
   }
 
@@ -1270,44 +1331,49 @@
         const baseScan = await ocrImageConsensus(state.baseFile, "Základní tabulka", "quarters");
         state.baseText = baseScan.text;
         const textQuarters = parseQuartersFromText(state.baseText);
-        const gridRead = await extractQuarterRowsFromGridImage(state.baseFile);
-        const positionRows = baseScan.rounds.flatMap(round=>round.positionRows || []);
+        const rowVote = aggregateQuarterRowsFromOcrRounds(baseScan.rounds);
+        const gridRead = rowVote.quarters.length >= 8 ? null : await extractQuarterRowsFromGridImage(state.baseFile);
         state.basePositionPages = baseScan.rounds.filter(round=>round.data).map(round=>({data:round.data}));
-        // If the cell reader produced a coherent sequence, prefer it over the
-        // free-text parser even when the latter invents extra/misaligned rows.
-        state.quarters = gridRead.ok && gridRead.quarters.length >= 10
-          ? gridRead.quarters
-          : (gridRead.quarters.length >= 8
-            ? gridRead.quarters
-            : textQuarters);
-        if (gridRead.quarters.length >= 10 && gridRead.ok) {
-          state.basePositionCheck = {
-            ok:true, matchedCount:state.quarters.length, expectedCount:state.quarters.length,
-            mode:"Čtení samostatných buněk",
-            detail:gridRead.detail + " Načteno "+state.quarters.length+" čtvrtletí.",
-            pageCount:1,
-            grid:gridRead.grid
-          };
+
+        // Prefer per-row OCR consensus over pixel-grid segmentation. The previous
+        // grid-border algorithm sometimes merged neighboring rows and shifted values
+        // (e.g. copied Q3/2024 into Q2/2024).
+        if (rowVote.quarters.length >= 8) {
+          state.quarters = rowVote.quarters;
           cellRateCheck = repairPremiumsFromCommonRate(state.quarters, parseAmount($("rateInput").value));
+          state.basePositionCheck = {
+            ok:rowVote.ok,
+            matchedCount:state.quarters.length,
+            expectedCount:12,
+            mode:"OCR hlasování po řádcích a sloupcích",
+            detail:rowVote.detail+" Načteno "+state.quarters.length+" čtvrtletí; hodnoty se vybírají podle četnosti z 20 čtení.",
+            pageCount:1
+          };
           if (cellRateCheck.corrections.length) {
             state.basePositionCheck.detail += " Opraveno OCR podle společné sazby "+cellRateCheck.rate.toLocaleString("cs-CZ")+" ‰: "+
               cellRateCheck.corrections.map(c=>c.period+" "+c.from+" → "+c.to+" Kč").join(", ")+".";
           }
           state.baseConsensus = {
             ...baseScan.consensus,
-            mode:"20 OCR průchodů + samostatné buňky",
-            unanimous:baseScan.rounds.length===20,
+            mode:"20 OCR průchodů + hlasování po řádcích",
+            unanimous:rowVote.ok,
             total:baseScan.rounds.length,
-            matchingRuns:baseScan.rounds.length,
+            matchingRuns:rowVote.usableRounds,
             details:baseScan.consensus.details,
-            note:"Rozhodující hodnoty byly přečteny po jednotlivých buňkách; textové rozdíly mezi OCR variantami nejsou považovány za chybu."
+            note:"Hodnoty jsou spárovány podle označení čtvrtletí a hlasováním po jednotlivých sloupcích; splatnost se odvozuje z období."
           };
         } else {
-          state.basePositionCheck = correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
+          state.quarters = gridRead && gridRead.quarters.length >= 8 ? gridRead.quarters : textQuarters;
+          state.basePositionCheck = gridRead && gridRead.quarters.length
+            ? { ok:gridRead.ok, matchedCount:gridRead.quarters.length, expectedCount:12, mode:"Záložní čtení tabulky", detail:gridRead.detail }
+            : correctQuarterValuesFromPositions(state.quarters, state.basePositionPages);
           state.baseConsensus = {
             ...baseScan.consensus,
             unanimous:false,
-            differences:(baseScan.consensus.differences||[]).concat("Samostatné buňky nešlo plně ověřit: "+gridRead.detail)
+            differences:(baseScan.consensus.differences||[]).concat(
+              "Hlasování po sloupcích nenašlo dost řádků; použito záložní čtení. "+
+              (gridRead ? gridRead.detail : "Zkontroluj načtené hodnoty.")
+            )
           };
         }
       } else {
