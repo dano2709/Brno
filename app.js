@@ -1273,9 +1273,13 @@
         const gridRead = await extractQuarterRowsFromGridImage(state.baseFile);
         const positionRows = baseScan.rounds.flatMap(round=>round.positionRows || []);
         state.basePositionPages = baseScan.rounds.filter(round=>round.data).map(round=>({data:round.data}));
-        state.quarters = gridRead.quarters.length >= textQuarters.length && gridRead.quarters.length >= 10
+        // If the cell reader produced a coherent sequence, prefer it over the
+        // free-text parser even when the latter invents extra/misaligned rows.
+        state.quarters = gridRead.ok && gridRead.quarters.length >= 10
           ? gridRead.quarters
-          : textQuarters;
+          : (gridRead.quarters.length >= 8
+            ? gridRead.quarters
+            : textQuarters);
         if (gridRead.quarters.length >= 10 && gridRead.ok) {
           state.basePositionCheck = {
             ok:true, matchedCount:state.quarters.length, expectedCount:state.quarters.length,
