@@ -154,6 +154,6 @@ for (let run=1;run<=10;run++) {
   assert.deepEqual(formulaResult.totals, expected, "independent Excel-formula model totals, run "+run);
   assert.deepEqual(formulaResult.quarters, expected.quarters, "independent Excel-formula model quarterly results, run "+run);
 }
-assert.ok(source.includes('"<= " &'), "export formulas must support an as-of-date limit");
+assert.ok(source.includes("\"<=\"&'Vstupní data'!$G$2"), "export formulas must support an as-of-date limit");
 assert.ok(source.includes("paymentInputRow}>'Vstupní data'!$G$2"), "payment allocation formulas must exclude payments after the selected calculation date");
 console.log("PASS: 10/10 runs matched application and independent Excel-formula model.");
