@@ -1982,6 +1982,7 @@
     workbook.created = new Date();
     workbook.modified = new Date();
     workbook.calcProperties.fullCalcOnLoad = true;
+    workbook.calcProperties.calcMode = "auto";
 
     const summary = workbook.addWorksheet("Souhrn", { views: [{ state: "frozen", ySplit: 3 }] });
     summary.columns = [{width:28},{width:19},{width:19},{width:20},{width:19},{width:19}];
@@ -1998,14 +1999,14 @@
     styleHeader(sumHeader);
     [
       ["Předepsané řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!E2:E41)" }, "Součet čtvrtletních předpisů – vzorec"],
-      ["Celkem skutečně zaplaceno", { formula: "SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\")" }, "Součet částek ze vstupních dat – vzorec"],
+      ["Celkem skutečně zaplaceno", { formula: "SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\",'Vstupní data'!A3:A102,\"<=\"&'Vstupní data'!$G$2)" }, "Součet částek ze vstupních dat – vzorec"],
       ["Započteno na řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!F2:F41)" }, "Přiřazení nejstaršímu nedoplatku – vzorec"],
       ["Zbývající řádné pojistné", { formula: "SUM('Přehled čtvrtletí'!G2:G41)" }, "Jistina po započtení plateb – vzorec"],
       ["Navýšení za prodlení celkem", { formula: "SUM('Přehled čtvrtletí'!H2:H41)" }, "Navýšení z uhrazených částek a otevřené jistiny – vzorec"],
       ["Uhrazené navýšení", { formula: "SUM('Přehled čtvrtletí'!I2:I41)" }, "Platby použité až po úhradě řádného pojistného – vzorec"],
       ["Zbývající navýšení", { formula: "SUM('Přehled čtvrtletí'!J2:J41)" }, "Neuhrazené navýšení za prodlení – vzorec"],
       ["Celkem zbývá uhradit", { formula: "SUM('Přehled čtvrtletí'!G2:G41)+SUM('Přehled čtvrtletí'!J2:J41)" }, "Zbývající pojistné a neuhrazené navýšení – vzorec"],
-      ["Nezařazený přeplatek", { formula: "MAX(0,SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\")-SUM('Přehled čtvrtletí'!E2:E41)-SUM('Přehled čtvrtletí'!I2:I41))" }, "Platby nad rámec jistiny a navýšení – vzorec"]
+      ["Nezařazený přeplatek", { formula: "MAX(0,SUMIFS('Vstupní data'!C3:C102,'Vstupní data'!A3:A102,\"<>\",'Vstupní data'!A3:A102,\"<=\"&'Vstupní data'!$G$2)-SUM('Přehled čtvrtletí'!E2:E41)-SUM('Přehled čtvrtletí'!I2:I41))" }, "Platby nad rámec jistiny a navýšení – vzorec"]
     ].forEach(row => summary.addRow(row));
     styleBodyRows(summary, 5);
     summary.getColumn(2).numFmt = "#,##0;[Red]-#,##0";
@@ -2138,7 +2139,7 @@
         {formula:`IF(A${rowNo}="","",'Vstupní data'!C${inputRow})`},
         {formula:`IF(A${rowNo}="","",'Vstupní data'!D${inputRow})`},
         {formula:`IF(A${rowNo}="","",IF(OR(D${rowNo}="", 'List1'!$I$1=""),'Vstupní data'!E${inputRow},ROUND(D${rowNo}*'List1'!$I$1/1000,0)))`},
-        {formula:`IF(A${rowNo}="","",MIN(E${rowNo},MAX(0,SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentEnd},'Vstupní data'!$A$${paymentStart}:$A$${paymentEnd},"<>")-${prevPremium})))`},
+        {formula:`IF(A${rowNo}="","",MIN(E${rowNo},MAX(0,SUMIFS('Vstupní data'!$C${paymentStart}:$C${paymentEnd},'Vstupní data'!$A${paymentStart}:$A${paymentEnd},"<>",'Vstupní data'!$A${paymentStart}:$A${paymentEnd},"<="&'Vstupní data'!$G$2)-${prevPremium})))`},
         {formula:`IF(A${rowNo}="","",MAX(0,E${rowNo}-F${rowNo}))`},
         {formula:`IF(A${rowNo}="","",SUMIF('Započtení plateb'!$B$2:$B$${1+paymentCapacity*quarterCapacity},A${rowNo},'Započtení plateb'!$E$2:$E$${1+paymentCapacity*quarterCapacity})+IF(G${rowNo}>0,ROUND(G${rowNo}*IF('Vstupní data'!$G$2<=B${rowNo},0,MAX(0,(YEAR('Vstupní data'!$G$2)-YEAR(B${rowNo}))*12+MONTH('Vstupní data'!$G$2)-MONTH(B${rowNo}))/10),0),0))`},
         {formula:`IF(A${rowNo}="","",MIN(SUMIF('Započtení plateb'!$B$2:$B$${1+paymentCapacity*quarterCapacity},A${rowNo},'Započtení plateb'!$E$2:$E$${1+paymentCapacity*quarterCapacity}),MAX(0,SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentEnd},'Vstupní data'!$A$${paymentStart}:$A$${paymentEnd},"<>")-SUM($E$2:$E$${1+quarterCapacity})-${priorPaidFee})))`},
@@ -2159,14 +2160,14 @@
       for (let qi=0;qi<quarterCapacity;qi++) {
         const quarterInputRow = quarterStart+qi;
         const quarterCalcRow = 2+qi;
-        const priorPaid = pi===0 ? "0" : `SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentInputRow-1},'Vstupní data'!$A$${paymentStart}:$A$${paymentInputRow-1},"<>")`;
-        const paidThrough = `SUMIFS('Vstupní data'!$C$${paymentStart}:$C$${paymentInputRow},'Vstupní data'!$A$${paymentStart}:$A$${paymentInputRow},"<>")`;
+        const priorPaid = pi===0 ? "0" : `SUMIFS('Vstupní data'!$C${paymentStart}:$C${paymentInputRow-1},'Vstupní data'!$A${paymentStart}:$A${paymentInputRow-1},"<>",'Vstupní data'!$A${paymentStart}:$A${paymentInputRow-1},"<="&'Vstupní data'!$G$2)`;
+        const paidThrough = `SUMIFS('Vstupní data'!$C${paymentStart}:$C${paymentInputRow},'Vstupní data'!$A${paymentStart}:$A${paymentInputRow},"<>",'Vstupní data'!$A${paymentStart}:$A${paymentInputRow},"<="&'Vstupní data'!$G$2)`;
         const priorPremium = qi===0 ? "0" : `SUM('Přehled čtvrtletí'!$E$2:$E$${quarterCalcRow-1})`;
         const premiumThrough = `SUM('Přehled čtvrtletí'!$E$2:$E$${quarterCalcRow})`;
         const row = alloc.addRow([
           {formula:`IF('Vstupní data'!A${paymentInputRow}="","",'Vstupní data'!A${paymentInputRow})`},
           {formula:`IF('Vstupní data'!A${quarterInputRow}="","",'Vstupní data'!A${quarterInputRow})`},
-          {formula:`IF(OR('Vstupní data'!$A$${paymentInputRow}="", 'Vstupní data'!$A$${quarterInputRow}="", 'Vstupní data'!$C$${paymentInputRow}<=0),0,MAX(0,MIN(${paidThrough},${premiumThrough})-MAX(${priorPaid},${priorPremium})))`},
+          {formula:`IF(OR('Vstupní data'!$A${paymentInputRow}="", 'Vstupní data'!$A${paymentInputRow}>'Vstupní data'!$G$2, 'Vstupní data'!$A${quarterInputRow}="", 'Vstupní data'!$C${paymentInputRow}<=0),0,MAX(0,MIN(${paidThrough},${premiumThrough})-MAX(${priorPaid},${priorPremium})))`},
           {formula:`IF(OR(A${allocRowNo}="",C${allocRowNo}<=0),0,IF(A${allocRowNo}<='Vstupní data'!$B$${quarterInputRow},0,MAX(0,(YEAR(A${allocRowNo})-YEAR('Vstupní data'!$B$${quarterInputRow}))*12+MONTH(A${allocRowNo})-MONTH('Vstupní data'!$B$${quarterInputRow}))))`},
           {formula:`IF(OR(A${allocRowNo}="",C${allocRowNo}<=0),0,IF(COUNTIFS($A$2:A${allocRowNo},A${allocRowNo},$B$2:B${allocRowNo},B${allocRowNo},$C$2:C${allocRowNo},">0")>1,0,ROUND(SUMIFS($C$2:$C${1+paymentCapacity*quarterCapacity},$A$2:$A${1+paymentCapacity*quarterCapacity},A${allocRowNo},$B$2:$B${1+paymentCapacity*quarterCapacity},B${allocRowNo})*D${allocRowNo}/10,0)))`},
           {formula:`IF(C${allocRowNo}=0,"","Automatické rozdělení: nejstarší jistina první")`}
