@@ -649,7 +649,9 @@
     const previousX = prevCandidates.length ? Math.max(...prevCandidates.map(w=>w.cx)) : null;
     const baseLeft = previousX == null ? 0 : (previousX+baseX)/2;
     const boundary = (baseX+premiumX)/2;
-    const tolerance = Math.max(4,height*0.008);
+    // OCR word boxes on multi-line table cells may vary by several pixels. Group by
+    // a tolerance below half a row height, so labels and numbers stay on the same row.
+    const tolerance = Math.max(8,height*0.016);
     const sorted = words.slice().sort((a,b)=>a.cy-b.cy || a.cx-b.cx);
     const grouped = [];
     sorted.forEach(word=>{
@@ -708,7 +710,7 @@
     const votesByPeriod = new Map();
     const usableRounds = (rounds || []).filter(round => round && (round.positionRows || round.data));
     for (const round of usableRounds) {
-      const parsed = Array.isArray(round.positionRows)
+      const parsed = Array.isArray(round.positionRows) && round.positionRows.length
         ? round.positionRows
         : positionRowsFromData(round.data).rows;
       const seenThisRound = new Set();
@@ -1021,11 +1023,9 @@
     ctx.drawImage(bitmap,0,0);
     const image=ctx.getImageData(0,0,canvas.width,canvas.height);
     const px=image.data, width=canvas.width, height=canvas.height;
-    const borderPixel=(x,y)=>{
+    const grayAt=(x,y)=>{
       const idx=(y*width+x)*4;
-      const r=px[idx],g=px[idx+1],b=px[idx+2];
-      const lum=(r+g+b)/3;
-      return Math.max(r,g,b)-Math.min(r,g,b)<18 && lum>=120 && lum<=195;
+      return (px[idx]+px[idx+1]+px[idx+2])/3;
     };
     const groupLines=(candidates)=>{
       const groups=[];
@@ -1036,37 +1036,65 @@
       });
       return groups.map(group=>group.sort((a,b)=>b.score-a.score)[0]);
     };
-    const xCandidates=[];
+
+    // Use edge strength, not a fixed gray-color range. The source grid has light
+    // borders and dropdown/input boxes inside cells; a border must persist through
+    // almost the whole table height to qualify as a column boundary.
     const yScanStart=Math.floor(height*0.05), yScanEnd=Math.floor(height*0.97);
-    for(let x=Math.floor(width*0.02);x<Math.floor(width*0.98);x++){
+    const xCandidates=[];
+    for(let x=Math.floor(width*0.03);x<Math.floor(width*0.97);x++){
       let count=0;
-      for(let y=yScanStart;y<yScanEnd;y++) if(borderPixel(x,y)) count++;
-      if(count>(yScanEnd-yScanStart)*0.55) xCandidates.push({pos:x,score:count});
+      for(let y=yScanStart;y<yScanEnd;y++){
+        if(Math.abs(grayAt(x,y)-grayAt(x-1,y))>10) count++;
+      }
+      if(count>(yScanEnd-yScanStart)*0.80) xCandidates.push({pos:x,score:count});
     }
     const xLines=groupLines(xCandidates);
-    if(xLines.length<6){ bitmap.close(); return {quarters:[],ok:false,detail:"Nepodařilo se najít svislé hranice sloupců tabulky."}; }
+    if(xLines.length<7){
+      bitmap.close();
+      return {quarters:[],ok:false,detail:"Nenašlo se všech 7 hranic šesti sloupců tabulky."};
+    }
     const minX=xLines[0].pos, maxX=xLines[xLines.length-1].pos;
-    const yCandidates=[];
     const lineWidth=maxX-minX;
-    for(let y=Math.floor(height*0.05);y<Math.floor(height*0.97);y++){
+    const yCandidates=[];
+    for(let y=Math.floor(height*0.03);y<Math.floor(height*0.97);y++){
       let count=0;
-      for(let x=minX;x<=maxX;x++) if(borderPixel(x,y)) count++;
-      if(count>lineWidth*0.62) yCandidates.push({pos:y,score:count});
+      for(let x=minX;x<=maxX;x++){
+        if(Math.abs(grayAt(x,y)-grayAt(x,y-1))>8) count++;
+      }
+      if(count>lineWidth*0.50) yCandidates.push({pos:y,score:count});
     }
     const yLines=groupLines(yCandidates);
-    // A real table has many evenly spaced horizontal cell borders. Pick the
-    // longest contiguous sequence with realistic row heights, not stray window rules.
+
+    // Choose the longest regular grid sequence. Title/header shading can create
+    // extra horizontal edges, so boundaries must repeat at the median row height.
+    const candidateGaps=[];
+    for(let i=1;i<yLines.length;i++){
+      const gap=yLines[i].pos-yLines[i-1].pos;
+      if(gap>=height*0.035 && gap<=height*0.10) candidateGaps.push(gap);
+    }
+    const sortedGaps=candidateGaps.slice().sort((a,b)=>a-b);
+    const typicalRowHeight=sortedGaps.length
+      ? (sortedGaps.length%2 ? sortedGaps[(sortedGaps.length-1)/2] : (sortedGaps[sortedGaps.length/2-1]+sortedGaps[sortedGaps.length/2])/2)
+      : height/16;
     let bestSequence=[];
     for(let start=0;start<yLines.length;start++){
-      const sequence=[yLines[start]];
+      const sequence=[yLines[start].pos];
       for(let j=start+1;j<yLines.length;j++){
-        const gap=yLines[j].pos-sequence[sequence.length-1].pos;
-        if(gap<height*0.02 || gap>height*0.12) break;
-        sequence.push(yLines[j]);
+        const last=sequence[sequence.length-1];
+        const gap=yLines[j].pos-last;
+        if(gap>=typicalRowHeight*0.72 && gap<=typicalRowHeight*1.32){
+          sequence.push(yLines[j].pos);
+        } else if(gap>=typicalRowHeight*1.65 && gap<=typicalRowHeight*2.35){
+          // Recover one faint/missing border by inserting the midpoint of a two-row gap.
+          sequence.push(Math.round(last+gap/2),yLines[j].pos);
+        } else {
+          break;
+        }
       }
       if(sequence.length>bestSequence.length) bestSequence=sequence;
     }
-    const rowLines=bestSequence.map(x=>x.pos);
+    const rowLines=bestSequence;
     if(rowLines.length<10 || xLines.length<6){
       bitmap.close();
       return {quarters:[],ok:false,detail:"Tabulkové vodorovné hranice nebyly nalezeny dostatečně spolehlivě."};
@@ -1760,7 +1788,17 @@
     const detail = [];
     let overpayment = 0;
 
-    payments.forEach(payment => {
+    // The source workbook aggregates same-day amounts by quarter before calculating
+    // the increase. Preserve that behavior when the OCR input contains several rows
+    // on one date, but keep each original payment row in the exported input sheet.
+    const paymentEventsByDate = new Map();
+    payments.filter(p => p.amount > 0 && validISODate(p.date)).forEach(payment => {
+      if (!paymentEventsByDate.has(payment.date)) paymentEventsByDate.set(payment.date, { date:payment.date, amount:0, index:payment.index });
+      paymentEventsByDate.get(payment.date).amount += payment.amount;
+    });
+    const paymentEvents = Array.from(paymentEventsByDate.values()).sort((a,b)=>a.date.localeCompare(b.date) || a.index-b.index);
+
+    paymentEvents.forEach(payment => {
       let remainingPayment = payment.amount;
       let principalAllocated = 0;
       let feesPaidThisPayment = 0;
@@ -2130,7 +2168,7 @@
           {formula:`IF('Vstupní data'!A${quarterInputRow}="","",'Vstupní data'!A${quarterInputRow})`},
           {formula:`IF(OR('Vstupní data'!$A$${paymentInputRow}="", 'Vstupní data'!$A$${quarterInputRow}="", 'Vstupní data'!$C$${paymentInputRow}<=0),0,MAX(0,MIN(${paidThrough},${premiumThrough})-MAX(${priorPaid},${priorPremium})))`},
           {formula:`IF(OR(A${allocRowNo}="",C${allocRowNo}<=0),0,IF(A${allocRowNo}<='Vstupní data'!$B$${quarterInputRow},0,MAX(0,(YEAR(A${allocRowNo})-YEAR('Vstupní data'!$B$${quarterInputRow}))*12+MONTH(A${allocRowNo})-MONTH('Vstupní data'!$B$${quarterInputRow}))))`},
-          {formula:`ROUND(C${allocRowNo}*D${allocRowNo}/10,0)`},
+          {formula:`IF(OR(A${allocRowNo}="",C${allocRowNo}<=0),0,IF(COUNTIFS($A$2:A${allocRowNo},A${allocRowNo},$B$2:B${allocRowNo},B${allocRowNo},$C$2:C${allocRowNo},">0")>1,0,ROUND(SUMIFS($C$2:$C${1+paymentCapacity*quarterCapacity},$A$2:$A${1+paymentCapacity*quarterCapacity},A${allocRowNo},$B$2:$B${1+paymentCapacity*quarterCapacity},B${allocRowNo})*D${allocRowNo}/10,0)))`},
           {formula:`IF(C${allocRowNo}=0,"","Automatické rozdělení: nejstarší jistina první")`}
         ]);
         row.getCell(1).numFmt = "dd.mm.yyyy";
