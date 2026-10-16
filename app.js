@@ -1079,34 +1079,52 @@
       for(let i=1;i<rowCount;i++){
         const y0=rowLines[i], y1=rowLines[i+1];
         if(y1-y0<height*0.02) continue;
+
+        // Always read the period label in its own cell. A missing/poorly read
+        // due-date cell must not cause the entire quarter to be skipped.
+        const periodCell=await cropText({x0:columns[0]+3,x1:columns[1]-3,y0:y0+2,y1:y1-2},"text");
+        const periodMatch=quarterMatch(periodCell.text);
         const dueCell=await cropText({x0:columns[1]+3,x1:columns[2]-3,y0:y0+2,y1:y1-2},"date");
-        const dueDate=toISO(dueCell.value);
-        const info=quarterFromDueDate(dueDate);
+        let dueDate=toISO(dueCell.value);
+        let info=periodMatch || quarterFromDueDate(dueDate);
         if(!info) continue;
+
+        // The source uses the last day of January/April/July/October for Q1/Q2/Q3/Q4.
+        // Use the recognized quarter label to recover an empty or contradictory OCR date.
+        const dueMonth = info.quarter * 3 - 2;
+        const expectedDue = toISO(new Date(info.year, dueMonth, 0));
+        const dueInfo = quarterFromDueDate(dueDate);
+        const correctedDueDate = (!dueDate || !dueInfo || dueInfo.period !== info.period) ? expectedDue : dueDate;
         const baseCell=await cropText({x0:columns[baseColumn]+3,x1:columns[baseColumn+1]-3,y0:y0+2,y1:y1-2},"number");
         const premiumCell=await cropText({x0:columns[premiumColumn]+3,x1:columns[premiumColumn+1]-3,y0:y0+2,y1:y1-2},"number");
         const base=Number(baseCell.value), premium=Math.round(Number(premiumCell.value));
         if(!(base>1000&&base<=10000000&&premium>=1&&premium<100000)) continue;
         quarters.push({
-          period:info.period,dueDate,sourcePeriod:previousQuarterPeriod(info),
+          period:info.period,dueDate:correctedDueDate,sourcePeriod:previousQuarterPeriod(info),
           base,premium,
-          raw:"Čtení samostatných buněk; základ: "+baseCell.text+"; pojistné: "+premiumCell.text,
+          raw:"Čtení samostatných buněk; období: "+periodCell.text+"; splatnost: "+(dueCell.text||"odvozena z období")+"; základ: "+baseCell.text+"; pojistné: "+premiumCell.text,
           cellConfidence:Math.round((baseCell.confidence+premiumCell.confidence+dueCell.confidence)/3),
-          baseCellText:baseCell.text,premiumCellText:premiumCell.text
+          baseCellText:baseCell.text,premiumCellText:premiumCell.text,
+          dueDateDerived:correctedDueDate!==dueDate
         });
       }
-      quarters.sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-      const expectedRows=Math.max(0,rowCount-2); // header + one non-premium helper row
-      const rowsComplete=quarters.length===expectedRows && quarters.length>=10 &&
-        quarters.every((q,i)=>i===0 || validationPeriodOrdinal(q.period)===validationPeriodOrdinal(quarters[i-1].period)+1);
+      // Keep one entry per period; prefer the row with complete independently-read cells.
+      const byPeriod=new Map();
+      quarters.forEach(q=>{
+        const existing=byPeriod.get(q.period);
+        if(!existing || (q.base>0&&q.premium>0&&q.cellConfidence>existing.cellConfidence)) byPeriod.set(q.period,q);
+      });
+      const uniqueQuarters=Array.from(byPeriod.values()).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+      const rowsComplete=uniqueQuarters.length>=10 &&
+        uniqueQuarters.every((q,i)=>i===0 || validationPeriodOrdinal(q.period)===validationPeriodOrdinal(uniqueQuarters[i-1].period)+1);
       bitmap.close();
       await worker.setParameters({tessedit_pageseg_mode:"3",tessedit_char_whitelist:""});
       return {
-        quarters, ok:rowsComplete && (headerConfirmed || quarters.length>=12),
+        quarters:uniqueQuarters, ok:rowsComplete && (headerConfirmed || uniqueQuarters.length>=12),
         headerConfirmed,
         detail:rowsComplete
-          ? (headerConfirmed ? "Základ a pojistné byly přečteny po samostatných buňkách a záhlaví potvrdila správné sloupce." : "Všechna čtvrtletí byla přečtena po samostatných buňkách; sloupce byly ověřeny číselnými a časovými návaznostmi.")
-          : "Podařilo se přečíst "+quarters.length+" čtvrtletí; pro kompletní tabulku je potřeba alespoň 10 navazujících řádků.",
+          ? (headerConfirmed ? "Základ, pojistné i období byly přečteny po samostatných buňkách; prázdné nebo rozporné datumy byly odvozeny z označení čtvrtletí." : "Čtvrtletí byla přečtena po samostatných buňkách; datumy byly doplněny podle označení období.")
+          : "Podařilo se bezpečně přečíst "+uniqueQuarters.length+" navazujících čtvrtletí; ověř, zda jsou čitelné buňky období, základu a pojistného.",
         grid:{columns,rowLines}
       };
     } catch(error) {
