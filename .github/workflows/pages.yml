@@ -25,7 +25,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run calculation regression tests
-        run: node tests/regression.test.cjs
+        run: |
+          node tests/regression.test.cjs
+          node tests/ocr-position.test.cjs
       - name: Cancel stale Pages runs
         env:
           GH_TOKEN: ${{ github.token }}
