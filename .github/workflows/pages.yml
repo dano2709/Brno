@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Run calculation regression tests
+        run: node tests/regression.test.cjs
       - name: Cancel stale Pages runs
         env:
           GH_TOKEN: ${{ github.token }}
